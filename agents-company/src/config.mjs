@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validateSignupUrl } from './site/signup.mjs';
 
 export const LLM_PROVIDERS = {
@@ -62,7 +63,8 @@ export function loadConfig(overrides = {}, env = process.env) {
     opportunities: Number(pick('opportunities', 'AGENTS_OPPORTUNITIES', 5)),
     concurrency: Number(pick('concurrency', 'AGENTS_CONCURRENCY', 3)),
     retries: Number(pick('retries', 'AGENTS_RETRIES', 3)),
-    dataDir: pick('dataDir', 'AGENTS_DATA_DIR', new URL('../data/', import.meta.url).pathname),
+    // fileURLToPath, not URL.pathname: on Windows .pathname gives "/C:/…", which is not a usable path.
+    dataDir: pick('dataDir', 'AGENTS_DATA_DIR', fileURLToPath(new URL('../data/', import.meta.url))),
     act: overrides.act ?? env.AGENTS_ACT !== '0',
     executeTop: Number(pick('executeTop', 'AGENTS_EXECUTE_TOP', 2)),
     webhookUrl: pick('webhookUrl', 'AGENTS_WEBHOOK_URL', ''),

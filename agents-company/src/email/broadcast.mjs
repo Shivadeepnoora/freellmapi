@@ -10,7 +10,8 @@ import { parseNewsletter, broadcastEmail } from './templates.mjs';
 export const NEWSLETTER_FILE = 'newsletter.md';
 
 export function canBroadcast(action) {
-  return action?.kind === 'send_email' && typeof action.artifact === 'string' && action.artifact.endsWith(`/${NEWSLETTER_FILE}`);
+  // Either separator: the artifact path may come from a Windows machine.
+  return action?.kind === 'send_email' && typeof action.artifact === 'string' && /[\\/]newsletter\.md$/.test(action.artifact);
 }
 
 export function emailLinks(site, signup) {

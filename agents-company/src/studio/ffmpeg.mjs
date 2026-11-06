@@ -3,7 +3,7 @@
 // prompts can never be interpreted as shell syntax.
 import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 
 export const WIDTH = 1080;
 export const HEIGHT = 1920;
@@ -56,7 +56,9 @@ export async function renderScene({ image, seconds, out, zoomIn = true }) {
 // Joins scene videos, joins the narration clips (each padded to its scene's
 // length), burns in the captions, and writes the final Short.
 export async function assembleShort({ dir, scenes, captionsFile, out = 'short.mp4' }) {
-  writeFileSync(join(dir, 'scenes.txt'), scenes.map((s) => `file '${s.video.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+  // File names only (ffmpeg runs in `dir`): Windows backslashes are escape
+  // characters in concat lists, so full paths would break there.
+  writeFileSync(join(dir, 'scenes.txt'), scenes.map((s) => `file '${basename(s.video).replace(/'/g, "'\\''")}'`).join('\n') + '\n');
   // Audio: pad every narration clip to its scene length so voice and picture stay in sync.
   const audioArgs = scenes.flatMap((s) => ['-i', s.audio]);
   const pads = scenes.map((s, i) => `[${i}:a]aresample=44100,aformat=channel_layouts=stereo,apad=whole_dur=${s.seconds.toFixed(3)}[a${i}]`);

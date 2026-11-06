@@ -82,9 +82,16 @@ One cycle:
 
 ## Quick start
 
+**New here? Follow [GETTING_STARTED.md](GETTING_STARTED.md).** It goes step by step from install
+to your first real Short, then YouTube autopilot, on Windows, macOS or Linux.
+
+Settings live in a `.env` file in this folder (`cp .env.example .env`), which every command reads
+automatically. Variables set in your shell override it.
+
 ```bash
-# offline demo, no server or keys needed
-node src/cli.mjs run --mock
+# offline demos, no server or keys needed
+npm run demo-short            # one YouTube Short with placeholder media
+node src/cli.mjs run --mock   # one income-research cycle
 ```
 
 For testing with free models, start FreeLLMAPI first (`npm run dev` at the repo root). Add LLM

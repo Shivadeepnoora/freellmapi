@@ -15,6 +15,8 @@
 // agents-company studio-list      videos made, with recorded results
 // agents-company studio-results <slug> --views N …   record a video's YouTube Studio numbers
 import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { loadEnvFile } from './env-file.mjs';
 import { Studio } from './studio/studio.mjs';
 import { StudioMemory } from './studio/memory.mjs';
 import { MockMediaClient, mediaFromConfig } from './studio/media.mjs';
@@ -121,6 +123,10 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_STUDIO_MAX_PENDING`);
   process.exit(values.help ? 0 : 1);
 }
+
+// Settings from agents-company/.env (copy .env.example). Shell variables win.
+const envFile = process.env.AGENTS_ENV_FILE ?? fileURLToPath(new URL('../.env', import.meta.url));
+loadEnvFile(envFile);
 
 const config = loadConfig({
   mock: values.mock,
