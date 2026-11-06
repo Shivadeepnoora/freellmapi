@@ -39,6 +39,18 @@ export function toMarkdown(run) {
       `| ${i + 1} | ${r.name} | ${r.category} | ${r.totalScore} | ${DEPARTMENTS.map((d) => r.reports[d.id]?.score ?? '—').join(' | ')} |`),
     ``,
   ];
+  if (run.execution?.length) {
+    lines.push(`## Actions taken`, ``);
+    for (const e of run.execution) {
+      lines.push(`### ${e.opportunity}`, ``, `Workspace: \`${e.workspace}\``, ``, `**Deliverables built**`, list(e.deliverables.map((d) => d.file)), ``);
+      lines.push(`**14-day plan**`, ``, `| Day | Task | Type | Needs approval |`, `|---|---|---|---|`);
+      e.tasks.forEach((t) => lines.push(`| ${t.day} | ${t.title} | ${t.kind} | ${t.type === 'external' ? 'yes' : 'no'} |`));
+      lines.push(``, `**Waiting for your approval:** ${e.approvals.join(', ') || 'none'}`);
+      if (e.failures.length) lines.push(``, `**Failures:** ${e.failures.map((f) => `${f.agent}: ${f.error}`).join('; ')}`);
+      lines.push(``);
+    }
+    lines.push(`Approve with \`node src/cli.mjs approve <id|all>\`, then \`node src/cli.mjs execute\`.`, ``);
+  }
   for (const r of run.ranked) {
     lines.push(`## ${r.name}`, ``, r.summary ?? '', ``);
     for (const d of DEPARTMENTS) {

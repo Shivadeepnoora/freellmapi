@@ -3,10 +3,12 @@
 // scores are aggregated and ranked, and the CEO writes the decision memo.
 import { RESEARCH_DIRECTOR, DEPARTMENTS, CEO } from './agents/roles.mjs';
 import { runPool } from './pool.mjs';
+import { ExecutionTeam } from './execution.mjs';
 
 export class Company {
-  constructor({ llm, memory, config, log = () => {} }) {
+  constructor({ llm, memory, config, approvals = null, log = () => {} }) {
     this.llm = llm;
+    this.approvals = approvals;
     this.memory = memory;
     this.config = config;
     this.log = log;
@@ -60,13 +62,19 @@ export class Company {
     try {
       decision = await this.llm.chatJSON([
         { role: 'system', content: CEO.system },
-        { role: 'user', content: `Ranked opportunities with department reports:\n${JSON.stringify(ranked.map(compactForCeo), null, 2)}\n\nBest past opportunities from memory:\n${JSON.stringify(this.memory.topOpportunities())}` },
+        { role: 'user', content: `Ranked opportunities with department reports:\n${JSON.stringify(ranked.map(compactForCeo), null, 2)}\n\nBest past opportunities from memory:\n${JSON.stringify(this.memory.topOpportunities())}\n\nActions from earlier runs (status):\n${JSON.stringify(this.memory.recentActions(10, this.approvals))}` },
       ], { temperature: 0.3 });
     } catch (err) {
       decision = { executive_summary: `CEO step failed: ${err.message}`, priorities: ranked.slice(0, 2).map((r) => r.name), next_actions: [] };
     }
 
-    Object.assign(run, { opportunities: opps, ranked, decision, finishedAt: new Date().toISOString() });
+    // 5. Act on the decision: build deliverables, plan, queue external actions for approval.
+    let execution = [];
+    if (this.config.act && this.approvals) {
+      execution = await new ExecutionTeam({ llm: this.llm, approvals: this.approvals, config: this.config, log: this.log }).execute({ id: run.id, ranked, decision });
+    }
+
+    Object.assign(run, { opportunities: opps, ranked, decision, execution, finishedAt: new Date().toISOString() });
     this.memory.recordRun(run);
     return run;
   }

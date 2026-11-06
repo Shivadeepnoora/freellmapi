@@ -11,6 +11,10 @@ export function loadConfig(overrides = {}) {
     concurrency: Number(overrides.concurrency ?? env.AGENTS_CONCURRENCY ?? 3),
     retries: Number(overrides.retries ?? env.AGENTS_RETRIES ?? 3),
     dataDir: overrides.dataDir ?? env.AGENTS_DATA_DIR ?? new URL('../data/', import.meta.url).pathname,
+    act: overrides.act ?? env.AGENTS_ACT !== '0',
+    executeTop: Number(overrides.executeTop ?? env.AGENTS_EXECUTE_TOP ?? 2),
+    webhookUrl: overrides.webhookUrl ?? env.AGENTS_WEBHOOK_URL ?? '',
+    webhookSecret: env.AGENTS_WEBHOOK_SECRET ?? '',
     intervalMs: parseInterval(overrides.interval ?? env.AGENTS_INTERVAL ?? '24h'),
   };
 }

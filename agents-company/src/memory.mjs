@@ -3,14 +3,14 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const EMPTY = { runs: [], opportunities: {} };
+const EMPTY = { runs: [], opportunities: {}, actions: [] };
 
 export class CompanyMemory {
   constructor(dataDir) {
     this.dataDir = dataDir;
     this.file = join(dataDir, 'memory.json');
     mkdirSync(dataDir, { recursive: true });
-    this.state = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : structuredClone(EMPTY);
+    this.state = { ...structuredClone(EMPTY), ...(existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : {}) };
   }
 
   knownOpportunityNames() {
@@ -30,7 +30,18 @@ export class CompanyMemory {
         lastRun: run.id,
       };
     }
+    for (const e of run.execution ?? []) {
+      this.state.actions.push({ run: run.id, opportunity: e.opportunity, deliverables: e.deliverables.map((d) => d.file), approvals: e.approvals });
+    }
     this.save();
+  }
+
+  // Latest action records, with the current approval status merged in.
+  recentActions(n = 10, approvals = null) {
+    return this.state.actions.slice(-n).map((a) => ({
+      ...a,
+      approvals: a.approvals.map((id) => ({ id, status: approvals?.get(id)?.status ?? 'unknown' })),
+    }));
   }
 
   topOpportunities(n = 5) {

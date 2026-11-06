@@ -10,6 +10,13 @@ const SAMPLE = [
   { name: 'API-as-a-product for a data niche', category: 'software' },
 ];
 
+const FILES = {
+  product_builder: '```html\n<!doctype html><html><head><title>Launch</title></head><body><h1>Coming soon</h1><form action="#"><input type="email"><button>Join</button></form></body></html>\n```',
+  content_writer: '# Launch post\n\nWhy this matters...\n\n## Social posts\n1. We are building something.',
+  sales_rep: '# Outreach\n\nHi {{first_name}}, ...\n\nReply STOP to opt out.',
+  automation_builder: '// Generates weekly content drafts locally.\nconsole.log("draft written");',
+};
+
 export class MockLLMClient {
   constructor() { this.calls = []; }
 
@@ -18,6 +25,7 @@ export class MockLLMClient {
     const user = messages.at(-1)?.content ?? '';
     this.calls.push({ system, user });
     const role = /ROLE:\s*([a-z_]+)/.exec(system)?.[1];
+    if (role in FILES) return FILES[role];
     return JSON.stringify(this.#answer(role, user));
   }
 
@@ -48,6 +56,15 @@ export class MockLLMClient {
         return { channels: ['SEO', 'X/Twitter', 'Communities'], first_30_days: ['Launch landing page', 'Post 10 pieces'], score: 6 };
       case 'risk_officer':
         return { risks: ['Platform dependence'], legal_notes: ['Disclose affiliate links'], ethical_flags: [], score: 8 };
+      case 'operations_manager':
+        return {
+          tasks: [
+            { day: 1, title: 'Review generated landing page', type: 'internal', kind: 'internal', artifact: 'landing-page.html' },
+            { day: 2, title: 'Publish landing page', type: 'external', kind: 'publish', artifact: 'landing-page.html', details: 'Deploy to static host' },
+            { day: 3, title: 'Post launch thread', type: 'external', kind: 'post_social', artifact: 'content.md' },
+            { day: 5, title: 'Buy domain', type: 'internal', kind: 'internal', cost_usd: 12 },
+          ],
+        };
       case 'ceo':
         return { executive_summary: 'Prioritise the highest-scoring, most automatable streams.', priorities: ['Start with the top 2 ranked opportunities'], next_actions: ['Build MVP for #1 this week'] };
       default:
