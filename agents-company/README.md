@@ -442,7 +442,8 @@ The Shorts link is saved on the approval item and in `studio-list`.
    node src/cli.mjs youtube-auth
    ```
    Open the printed link, choose the Google account that owns the channel, and allow *Manage your
-   YouTube videos*. Only the `youtube.upload` permission is requested. The refresh token is saved
+   YouTube videos* and *View YouTube Analytics reports*. Only `youtube.upload` and the read-only
+   `yt-analytics.readonly` are requested (see [YouTube Analytics](#youtube-analytics-stats-pulled-automatically)). The refresh token is saved
    to `data/youtube-token.json`, readable only by you, or you can provide it as
    `YOUTUBE_REFRESH_TOKEN`.
    **On a server without a browser:** open the link on any device. When the browser ends on a
@@ -469,6 +470,38 @@ The Shorts link is saved on the approval item and in `studio-list`.
 - A video already linked to a YouTube ID is never uploaded again.
 - Interrupted uploads resume from the byte YouTube confirmed.
 - `<` and `>` are stripped from the title, description and tags, because YouTube rejects them.
+
+### YouTube Analytics: stats pulled automatically
+
+With YouTube connected, every **studio run** (before choosing topics) and every **daemon tick**
+pulls each uploaded Short's numbers from the YouTube Analytics API v2:
+
+| Stored as | From |
+|---|---|
+| views, likes, comments | `views`, `likes`, `comments` |
+| subscribers | `subscribersGained` |
+| viewed % | `averageViewPercentage` |
+| average view seconds | `averageViewDuration` |
+
+They go where `studio-results` writes, marked *YouTube Analytics* in `studio-list`, so the Topic
+Researcher learns from real numbers. Analytics replaces hand-typed values field by field.
+`studio-sync` pulls them on demand.
+
+```bash
+node src/cli.mjs studio-sync
+node src/cli.mjs studio-list
+```
+
+- **Permission:** `youtube-auth` now also asks for **"View YouTube Analytics reports"**
+  (`yt-analytics.readonly`, read-only). If you connected before this feature, or unticked it, run
+  `youtube-auth` once more. `check` shows `analytics on / not granted / off`. Set
+  `AGENTS_YOUTUBE_ANALYTICS=0` to keep upload-only access, and record results by hand.
+- **Delay:** YouTube Analytics data usually lags **1–3 days**, so a fresh upload shows *uploaded,
+  waiting for analytics* until its first numbers arrive.
+- **Never blocking:** if Analytics is unavailable, the studio run and the business cycle continue
+  and the problem is logged. Only `studio-sync` reports it as an error.
+- **Quota:** each sync is one request per 200 videos against the separate YouTube Analytics API
+  quota, so daily syncing costs effectively nothing.
 
 ### How a Shorts channel earns, honestly
 
@@ -556,6 +589,7 @@ node src/cli.mjs memory
 | `--privacy` | `AGENTS_YOUTUBE_PRIVACY` | `public` |
 | (env only) | `AGENTS_YOUTUBE_SYNTHETIC=0` | disclosure on |
 | (env only) | `AGENTS_YOUTUBE_AUTH_PORT` | `8976` (loopback port for sign-in) |
+| (env only) | `AGENTS_YOUTUBE_ANALYTICS=0` | on (pull stats from YouTube Analytics) |
 
 ## Extend it
 

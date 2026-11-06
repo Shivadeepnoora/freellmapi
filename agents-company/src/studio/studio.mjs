@@ -15,8 +15,9 @@ const SCENE_PAD = 0.35; // breathing room after each line
 const END_PAD = 0.8;    // a beat after the last line
 
 export class Studio {
-  constructor({ llm, media, search = null, memory, approvals = null, config, log = () => {} }) {
-    Object.assign(this, { llm, media, search, memory, approvals, config, log });
+  // syncStats: optional async () => …, run first so topic research sees fresh YouTube numbers.
+  constructor({ llm, media, search = null, memory, approvals = null, config, syncStats = null, log = () => {} }) {
+    Object.assign(this, { llm, media, search, memory, approvals, config, syncStats, log });
   }
 
   async run() {
@@ -28,6 +29,11 @@ export class Studio {
     this.llm.takeUsage?.();
     const searchesBefore = this.search?.count ?? 0;
     const library = new SourceLibrary();
+
+    // 0. Fresh results from YouTube Analytics, if connected (a failure never stops production)
+    if (this.syncStats) {
+      try { await this.syncStats(); } catch (err) { this.log(`[YouTube Analytics] skipped: ${err.message}`); }
+    }
 
     // 1. Research the niche
     if (this.search) {

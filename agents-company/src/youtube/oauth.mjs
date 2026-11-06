@@ -1,7 +1,8 @@
 // Google OAuth for an installed app (loopback redirect + PKCE), as Google
-// recommends for command-line tools. Only the youtube.upload scope is asked
-// for. The refresh token is stored in data/youtube-token.json (mode 600) or
-// read from YOUTUBE_REFRESH_TOKEN.
+// recommends for command-line tools. Scopes: youtube.upload, plus the
+// read-only yt-analytics.readonly unless analytics is turned off. Nothing
+// else on the account is requested. The refresh token is stored in
+// data/youtube-token.json (mode 600) or read from YOUTUBE_REFRESH_TOKEN.
 //
 //   youtube-auth                 prints the consent URL and waits on 127.0.0.1 for Google's redirect
 //   youtube-auth --redirect URL  finishes by hand (paste the URL the browser ended on), for headless servers
@@ -11,6 +12,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync, unlinkSync, renameS
 import { join } from 'node:path';
 
 export const SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
+export const ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -27,7 +29,7 @@ function writePrivate(file, value) {
 }
 
 // Step 1: build the consent URL and remember the PKCE verifier + state.
-export function startAuth({ clientId, dataDir, port }) {
+export function startAuth({ clientId, dataDir, port, analytics = true }) {
   if (!clientId) throw new Error('Set YOUTUBE_CLIENT_ID (a Google Cloud OAuth client of type "Desktop app")');
   const verifier = b64url(randomBytes(48));
   const state = b64url(randomBytes(24));
@@ -37,7 +39,7 @@ export function startAuth({ clientId, dataDir, port }) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: SCOPE,
+    scope: analytics ? `${SCOPE} ${ANALYTICS_SCOPE}` : SCOPE,
     access_type: 'offline',
     prompt: 'consent', // always return a refresh token
     code_challenge: b64url(createHash('sha256').update(verifier).digest()),
@@ -73,7 +75,17 @@ export async function finishAuth({ clientId, clientSecret, dataDir, redirectedUr
   if (!String(data.scope ?? '').split(' ').includes(SCOPE)) throw new Error('The YouTube upload permission was not granted');
   writePrivate(tokenFile(dataDir), { refresh_token: data.refresh_token, scope: data.scope, obtainedAt: new Date().toISOString() });
   unlinkSync(pf);
-  return { scope: data.scope };
+  return { scope: data.scope, analytics: String(data.scope).split(' ').includes(ANALYTICS_SCOPE) };
+}
+
+// Scopes the stored token was granted. A token given via YOUTUBE_REFRESH_TOKEN
+// is not inspectable, so it is assumed to have what was asked for; a missing
+// scope then surfaces as a clear error on first use.
+export function grantedScopes(config) {
+  if (config.youtubeRefreshToken) return [SCOPE, ANALYTICS_SCOPE];
+  const f = tokenFile(config.dataDir);
+  if (!existsSync(f)) return [];
+  return String(JSON.parse(readFileSync(f, 'utf8')).scope ?? '').split(' ').filter(Boolean);
 }
 
 // Runs a one-shot loopback server that catches Google's redirect.

@@ -29,8 +29,9 @@ test('startAuth builds a PKCE consent URL for the upload scope and stores the ve
   const u = new URL(url);
   assert.equal(u.origin + u.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
   const p = Object.fromEntries(u.searchParams);
-  assert.equal(p.scope, SCOPE);
-  assert.equal(p.scope, 'https://www.googleapis.com/auth/youtube.upload');
+  // Upload plus read-only analytics by default; upload only when analytics is off.
+  assert.equal(p.scope, 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/yt-analytics.readonly');
+  assert.equal(new URL(startAuth({ clientId: 'cid', dataDir: tmp(), port: 1, analytics: false }).url).searchParams.get('scope'), SCOPE);
   assert.deepEqual([p.response_type, p.access_type, p.prompt, p.code_challenge_method, p.redirect_uri], ['code', 'offline', 'consent', 'S256', redirectUri]);
   assert.equal(redirectUri, 'http://127.0.0.1:8976/oauth2callback');
   const pendingPath = join(dir, 'youtube-auth-pending.json');

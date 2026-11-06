@@ -36,7 +36,8 @@ export class StudioMemory {
       clean[k] = n;
     }
     if (!Object.keys(clean).length) throw new Error(`Give at least one of: ${RESULT_FIELDS.map((f) => `--${kebab(f)}`).join(', ')}`);
-    v.results = { ...(v.results ?? {}), ...clean, at };
+    // Analytics numbers replace hand-typed ones field by field; `source` says where they came from.
+    v.results = { ...(v.results ?? {}), ...clean, at, source: results.source === 'youtube-analytics' ? 'youtube-analytics' : 'manual' };
     if (results.youtubeUrl) v.youtubeUrl = String(results.youtubeUrl);
     this.save();
     return v;

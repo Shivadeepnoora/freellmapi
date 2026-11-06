@@ -5,7 +5,7 @@
 // OpenAI-compatible API and a paid search API, and set AGENTS_ENV=production
 // so the company refuses to run on free tiers by accident.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateSignupUrl } from './site/signup.mjs';
 
@@ -109,6 +109,7 @@ export function loadConfig(overrides = {}, env = process.env) {
     youtubeSynthetic: env.AGENTS_YOUTUBE_SYNTHETIC !== '0',
     youtubeAuthPort: Number(env.AGENTS_YOUTUBE_AUTH_PORT ?? 8976),
     get youtubeAutoUpload() { return Boolean(this.youtubeClientId && (this.youtubeRefreshToken || existsSync(join(this.dataDir, 'youtube-token.json')))); },
+    youtubeAnalytics: env.AGENTS_YOUTUBE_ANALYTICS !== '0',
 
     minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
     targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
@@ -201,7 +202,17 @@ export function validateYouTubeConfig(config) {
   if (!['public', 'unlisted', 'private'].includes(config.youtubePrivacy)) errors.push(`AGENTS_YOUTUBE_PRIVACY must be public, unlisted or private (got "${config.youtubePrivacy}")`);
   if (config.youtubeClientId && !config.youtubeClientSecret) warnings.push('YOUTUBE_CLIENT_SECRET is not set; Google requires it for "Desktop app" OAuth clients.');
   if (config.youtubeClientId && !config.youtubeAutoUpload) warnings.push('YouTube is not connected yet: run `node src/cli.mjs youtube-auth` once. Until then, approved videos are marked for manual upload.');
+  if (config.youtubeAutoUpload && config.youtubeAnalytics && !config.youtubeRefreshToken && !youtubeAnalyticsGranted(config)) {
+    warnings.push('YouTube Analytics is not granted on the saved sign-in, so stats are not pulled automatically: run `node src/cli.mjs youtube-auth` again and allow "View YouTube Analytics reports".');
+  }
   return { errors, warnings };
+}
+
+export function youtubeAnalyticsGranted(config) {
+  if (config.youtubeRefreshToken) return true;
+  const f = join(config.dataDir, 'youtube-token.json');
+  if (!existsSync(f)) return false;
+  try { return String(JSON.parse(readFileSync(f, 'utf8')).scope ?? '').includes('yt-analytics.readonly'); } catch { return false; }
 }
 
 // Origins allowed to post signups: the explicit list, else the GitHub Pages

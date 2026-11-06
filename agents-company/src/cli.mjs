@@ -22,7 +22,8 @@ import { hasFfmpeg } from './studio/ffmpeg.mjs';
 import { startAuth, finishAuth, waitForRedirect } from './youtube/oauth.mjs';
 import { mailerFromConfig } from './email/resend.mjs';
 import { welcomeEmail } from './email/templates.mjs';
-import { loadConfig, validateConfig, validateStudioConfig, validateYouTubeConfig, signupOrigins } from './config.mjs';
+import { loadConfig, validateConfig, validateStudioConfig, validateYouTubeConfig, youtubeAnalyticsGranted, signupOrigins } from './config.mjs';
+import { analyticsFromConfig, syncStudioStats } from './youtube/analytics.mjs';
 import { MetricsStore, metricsFromConfig } from './feedback/metrics.mjs';
 import { collectResults } from './feedback/traction.mjs';
 import { LLMClient } from './llm.mjs';
@@ -36,7 +37,7 @@ import { buildExecutors, siteFromConfig } from './executors/index.mjs';
 import { publisherFromConfig } from './executors/github-pages.mjs';
 import { createWebhookServer } from './executors/webhook-server.mjs';
 
-const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test', 'studio', 'studio-list', 'studio-results', 'youtube-auth'];
+const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test', 'studio', 'studio-list', 'studio-results', 'studio-sync', 'youtube-auth'];
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -93,6 +94,7 @@ if (values.help || !COMMANDS.includes(command)) {
   email-test: <to-address>  send one test email through Resend
   studio:     [--niche "..."] [--videos 2] [--mock]   make YouTube Shorts for review
   youtube-auth: connect YouTube once (opens Google consent); [--redirect URL] to finish on a headless server
+  studio-sync: pull views, retention and subscribers for uploaded Shorts from YouTube Analytics now
   execute:    also uploads approved Shorts to YouTube when connected; [--privacy public|unlisted|private]
   studio-list / studio-results <slug> [--views N] [--likes N] [--comments N] [--subscribers N]
               [--viewed-pct N] [--avg-view-seconds N] [--url https://youtube.com/shorts/…]
@@ -109,7 +111,7 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_EMAIL_MAX_RECIPIENTS, AGENTS_CHANNEL_NICHE, AGENTS_CHANNEL_NAME, AGENTS_CHANNEL_LINK, AGENTS_CHANNEL_CTA,
      AGENTS_STUDIO_VIDEOS, AGENTS_MEDIA_BASE_URL, AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_TTS_VOICE, AGENTS_IMAGE_MODEL,
      YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN, AGENTS_YOUTUBE_PRIVACY, AGENTS_YOUTUBE_SYNTHETIC=0,
-     AGENTS_YOUTUBE_AUTH_PORT`);
+     AGENTS_YOUTUBE_AUTH_PORT, AGENTS_YOUTUBE_ANALYTICS=0`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -149,6 +151,19 @@ try {
   process.exit(1);
 }
 const dispatch = () => approvals.dispatch({ webhookUrl: config.webhookUrl, webhookSecret: config.webhookSecret, executors, log });
+
+// Pulls YouTube Analytics stats into studio memory. Quietly does nothing when
+// YouTube or analytics isn't set up, unless `required` (studio-sync).
+async function syncYouTube({ required = false } = {}) {
+  const analytics = analyticsFromConfig(config);
+  if (!analytics) {
+    if (!required) return { updated: [], waiting: [], uploaded: 0 };
+    if (!config.youtubeAutoUpload) throw new Error('YouTube is not connected: set YOUTUBE_CLIENT_ID and run `youtube-auth`');
+    if (!config.youtubeAnalytics) throw new Error('analytics is turned off (AGENTS_YOUTUBE_ANALYTICS=0)');
+    throw new Error('the saved sign-in has no Analytics permission: run `youtube-auth` again and allow "View YouTube Analytics reports"');
+  }
+  return syncStudioStats({ analytics, memory: new StudioMemory(config.dataDir), log });
+}
 
 switch (command) {
   case 'memory':
@@ -264,6 +279,7 @@ switch (command) {
       memory: new StudioMemory(config.dataDir),
       approvals,
       config,
+      syncStats: config.mock ? null : () => syncYouTube(),
       log,
     });
     try {
@@ -282,8 +298,20 @@ switch (command) {
     if (!memoryS.state.videos.length) console.log('No videos yet. Run `studio` first.');
     for (const v of memoryS.state.videos) {
       const r = v.results;
-      const stats = r ? `${r.views ?? '?'} views${r.viewedPct != null ? `, ${r.viewedPct}% viewed` : ''}${r.subscribers != null ? `, +${r.subscribers} subs` : ''}` : 'no results recorded';
+      const from = r?.source === 'youtube-analytics' ? ` (YouTube Analytics, ${String(r.at).slice(0, 10)})` : r ? ' (typed in)' : '';
+      const stats = r ? `${r.views ?? '?'} views${r.viewedPct != null ? `, ${r.viewedPct}% viewed` : ''}${r.subscribers != null ? `, +${r.subscribers} subs` : ''}${from}` : v.videoId ? 'uploaded, waiting for analytics' : 'no results recorded';
       console.log(`${v.slug}\n    ${v.title} · ${v.duration}s · ${stats}${v.youtubeUrl ? ` · ${v.youtubeUrl}` : ''}`);
+    }
+    break;
+  }
+  case 'studio-sync': {
+    try {
+      const r = await syncYouTube({ required: true });
+      if (!r.uploaded) console.log('No uploaded Shorts yet. Approve and execute a publish_video item first.');
+      else console.log(`Updated ${r.updated.length} of ${r.uploaded} uploaded Short(s)${r.waiting.length ? `; waiting for data: ${r.waiting.join(', ')}` : ''}. See \`studio-list\`.`);
+    } catch (err) {
+      console.error(`YouTube Analytics sync failed: ${err.message}`);
+      process.exit(1);
     }
     break;
   }
@@ -310,8 +338,9 @@ switch (command) {
       if (values.redirect) {
         await finishAuth({ ...creds, redirectedUrl: values.redirect });
       } else {
-        const { url } = startAuth({ ...creds, port: config.youtubeAuthPort });
-        console.log(`Open this link in a browser on this machine and allow "Manage your YouTube videos" (upload only):\n\n${url}\n`);
+        const { url } = startAuth({ ...creds, port: config.youtubeAuthPort, analytics: config.youtubeAnalytics });
+        const perms = config.youtubeAnalytics ? '"Manage your YouTube videos" (uploads) and "View YouTube Analytics reports" (read-only)' : '"Manage your YouTube videos" (uploads)';
+        console.log(`Open this link in a browser on this machine and allow ${perms}:\n\n${url}\n`);
         console.log(`Waiting for Google to redirect to 127.0.0.1:${config.youtubeAuthPort} …`);
         console.log('On a server without a browser: open the link anywhere, then copy the URL the browser ends on (it starts with');
         console.log(`http://127.0.0.1:${config.youtubeAuthPort}/oauth2callback?…, the page itself will not load) and run:`);
@@ -319,6 +348,11 @@ switch (command) {
         await waitForRedirect({ port: config.youtubeAuthPort, onUrl: (u) => finishAuth({ ...creds, redirectedUrl: u }) });
       }
       console.log(`YouTube connected. Approved Shorts will be uploaded as ${config.youtubePrivacy} by \`execute\` and the daemon.`);
+      if (config.youtubeAnalytics) {
+        console.log(youtubeAnalyticsGranted(config)
+          ? 'YouTube Analytics granted: stats are pulled on every studio run and daemon tick (and with `studio-sync`).'
+          : 'YouTube Analytics was not granted, so enter stats with `studio-results`, or run `youtube-auth` again and allow it.');
+      }
     } catch (err) {
       console.error(`YouTube sign-in failed: ${err.message}`);
       process.exit(1);
@@ -351,7 +385,8 @@ switch (command) {
     console.log(`Environment: ${config.environment}${config.mock ? ' (mock)' : ''}`);
     console.log(`LLM:    ${config.provider} · ${config.baseUrl || '(no URL)'} · model ${config.model || '(none)'}${strong} · key ${config.apiKey ? 'set' : 'missing'}`);
     console.log(`Search: ${config.searchProvider}${config.searchUrl ? ` · ${config.searchUrl}` : ''} · key ${searchKey}`);
-    console.log(`YouTube: ${config.youtubeAutoUpload ? `connected · uploads as ${config.youtubePrivacy}${config.youtubeSynthetic ? ' · AI disclosure on' : ''}` : config.youtubeClientId ? 'client set, not connected (run youtube-auth)' : 'manual upload'}`);
+    const ytAnalytics = !config.youtubeAnalytics ? 'analytics off' : youtubeAnalyticsGranted(config) ? 'analytics on' : 'analytics not granted';
+    console.log(`YouTube: ${config.youtubeAutoUpload ? `connected · uploads as ${config.youtubePrivacy}${config.youtubeSynthetic ? ' · AI disclosure on' : ''} · ${ytAnalytics}` : config.youtubeClientId ? 'client set, not connected (run youtube-auth)' : 'manual upload'}`);
     const yt = validateYouTubeConfig(config);
     [...warnings, ...yt.warnings].forEach((w) => console.log(`warning: ${w}`));
     errors.push(...yt.errors);
@@ -405,6 +440,8 @@ async function runOrDaemon() {
     running = true;
     try {
       await dispatch();
+      // YouTube stats never block the business cycle.
+      if (!config.mock) await syncYouTube().catch((err) => log(`[YouTube Analytics] skipped: ${err.message}`));
       await cycle();
     } catch (err) {
       log(`Cycle failed: ${err.message}`);
