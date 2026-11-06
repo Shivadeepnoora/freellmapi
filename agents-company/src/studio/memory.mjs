@@ -42,6 +42,15 @@ export class StudioMemory {
     return v;
   }
 
+  // Called by the YouTube executor after a successful upload.
+  linkUpload(slug, { videoId, youtubeUrl, privacy }) {
+    const v = this.find(slug);
+    if (!v) return null;
+    Object.assign(v, { videoId, youtubeUrl, privacy, uploadedAt: new Date().toISOString() });
+    this.save();
+    return v;
+  }
+
   // Ranks videos that have results by a simple score: views, weighted up by
   // retention and by subscribers gained per 1,000 views.
   ranked() {

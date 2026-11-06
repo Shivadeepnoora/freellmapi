@@ -364,7 +364,8 @@ status column and never includes the secret link tokens.
 ## YouTube Shorts studio
 
 A separate production line that runs a faceless YouTube Shorts channel: voiceover over AI visuals,
-with burned-in captions. You upload the finished videos yourself (for now).
+with burned-in captions. Once you [connect YouTube](#automatic-youtube-upload), approving a video
+uploads it; otherwise you upload the finished files yourself.
 
 ```
 Topic Researcher → Scriptwriter → Standards Reviewer → Producer (voice + images + ffmpeg) → your review → you upload
@@ -413,6 +414,61 @@ honest AI note are added. Captions escape ASS control characters. ffmpeg runs wi
 
 **Cost per video:** about 3 LLM calls (more if a rewrite is needed), 5–7 voiceover clips, 5–7
 images and 2 searches, plus the 4 searches and 1 call per run for topics.
+
+### Automatic YouTube upload
+
+When YouTube is connected, approving a `publish_video` item and running `execute` (or letting the
+daemon run) uploads the Short through the YouTube Data API:
+- the title, description and tags come from the package
+- *Made for kids* is set to **No**
+- **altered/synthetic content** is disclosed (`AGENTS_YOUTUBE_SYNTHETIC=0` turns that off, but
+  only do so if no visual could pass for real)
+- privacy is `AGENTS_YOUTUBE_PRIVACY` (`public` by default, or `unlisted` or `private`)
+
+The Shorts link is saved on the approval item and in `studio-list`.
+
+**One-time setup (about 10 minutes):**
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable
+   **YouTube Data API v3**.
+2. Under **OAuth consent screen**, choose *External*, fill in the app name and your email, and add
+   your Google account as a test user.
+3. Under **Credentials → Create credentials → OAuth client ID**, choose **Desktop app**. Copy the
+   client ID and secret.
+4. Connect:
+   ```bash
+   export YOUTUBE_CLIENT_ID=....apps.googleusercontent.com
+   export YOUTUBE_CLIENT_SECRET=...
+   node src/cli.mjs youtube-auth
+   ```
+   Open the printed link, choose the Google account that owns the channel, and allow *Manage your
+   YouTube videos*. Only the `youtube.upload` permission is requested. The refresh token is saved
+   to `data/youtube-token.json`, readable only by you, or you can provide it as
+   `YOUTUBE_REFRESH_TOKEN`.
+   **On a server without a browser:** open the link on any device. When the browser ends on a
+   `http://127.0.0.1:8976/oauth2callback?…` page that doesn't load, copy that URL and run
+   `node src/cli.mjs youtube-auth --redirect "<URL>"`.
+5. `node src/cli.mjs check` should show `YouTube: connected`.
+
+**What to expect from Google:**
+- **New API projects upload as private.** YouTube locks videos uploaded by unaudited API projects
+  to private until the project passes its
+  [API compliance audit](https://support.google.com/youtube/contact/yt_api_form). The executor
+  notices this and notes it on the item. Until the audit passes, switch videos to public in
+  YouTube Studio.
+- **"Testing" OAuth apps get tokens that expire after 7 days.** Publish the consent screen (it can
+  stay unverified for your own use) to keep the connection. If access lapses, `execute` tells you
+  to run `youtube-auth` again.
+- **Quota.** An upload costs 1,600 of the default 10,000 daily units, so about 6 uploads a day.
+  When the quota or the channel's daily upload limit is reached, the item **stays approved** with
+  a note and uploads on the next run.
+
+**Safety.**
+- Only a `short.mp4` that the studio wrote under `data/workspace/studio/` can be uploaded, so an
+  edited `approvals.json` can't upload anything else.
+- A video already linked to a YouTube ID is never uploaded again.
+- Interrupted uploads resume from the byte YouTube confirmed.
+- `<` and `>` are stripped from the title, description and tags, because YouTube rejects them.
 
 ### How a Shorts channel earns, honestly
 
@@ -495,6 +551,11 @@ node src/cli.mjs memory
 | (env only) | `AGENTS_CHANNEL_NAME` / `AGENTS_CHANNEL_LINK` / `AGENTS_CHANNEL_CTA` | — / — / `Free newsletter` |
 | (env only) | `AGENTS_MEDIA_BASE_URL` / `AGENTS_MEDIA_API_KEY` | FreeLLMAPI / `FREELLMAPI_API_KEY` |
 | (env only) | `AGENTS_TTS_MODEL` / `AGENTS_TTS_VOICE` / `AGENTS_IMAGE_MODEL` | `auto` / `alloy` / `auto` |
+| (env only) | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | — (manual upload) |
+| (env only) | `YOUTUBE_REFRESH_TOKEN` | from `data/youtube-token.json` (`youtube-auth`) |
+| `--privacy` | `AGENTS_YOUTUBE_PRIVACY` | `public` |
+| (env only) | `AGENTS_YOUTUBE_SYNTHETIC=0` | disclosure on |
+| (env only) | `AGENTS_YOUTUBE_AUTH_PORT` | `8976` (loopback port for sign-in) |
 
 ## Extend it
 

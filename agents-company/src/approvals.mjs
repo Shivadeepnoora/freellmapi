@@ -44,6 +44,8 @@ export class ApprovalQueue {
   //   2. the webhook, which receives the action plus the artifact's content
   //   3. otherwise it is marked "manual" for a human to do.
   // A webhook reply of {"status":"ignored"} also means "manual".
+  // An executor may answer {"status":"deferred", reason}: the item stays
+  // approved (e.g. YouTube's daily quota is used up) and is retried next time.
   async dispatch({ webhookUrl, webhookSecret, executors = [], fetchImpl = globalThis.fetch, log = () => {} }) {
     const done = [];
     for (const item of this.list('approved')) {
@@ -51,6 +53,12 @@ export class ApprovalQueue {
         const executor = executors.find((e) => e.canHandle(item));
         if (executor) {
           const result = await executor.execute(item, this.readArtifact(item));
+          if (result?.status === 'deferred') {
+            Object.assign(item, { note: result.reason, lastCheckedAt: new Date().toISOString() });
+            log(`[Executor] ${item.id} waiting: ${result.reason}`);
+            this.save();
+            continue;
+          }
           this.#finish(item, 'executed', result);
           log(`[Executor] ${item.id} executed by ${result.executor}: ${item.title}${result.url ? ` -> ${result.url}` : ''}`);
         } else if (webhookUrl) {
@@ -103,7 +111,11 @@ export class ApprovalQueue {
     if (result?.url) item.resultUrl = result.url;
     if (result?.page) item.page = result.page;
     if (result?.signupCapture !== undefined) item.signupCapture = result.signupCapture;
+    if (result?.executor) item.executor = result.executor;
+    if (result?.videoId) item.videoId = result.videoId;
+    if (result?.privacy) item.privacy = result.privacy;
     if (result?.reason) item.note = result.reason;
+    else if (status === 'executed') delete item.note;
     delete item.error;
   }
 

@@ -128,11 +128,14 @@ export class Studio {
         platform: 'youtube',
         opportunity: this.config.channelName || 'YouTube channel',
         title: `YouTube Short: ${script.title}`,
-        details: `${video.duration}s vertical Short. Watch it, then upload by hand using UPLOAD.md.`,
+        details: this.config.youtubeAutoUpload
+          ? `${video.duration}s vertical Short. Watch it; approving uploads it to YouTube as ${this.config.youtubePrivacy}.`
+          : `${video.duration}s vertical Short. Watch it, then upload by hand using UPLOAD.md.`,
         videoPath,
         coverPath,
         uploadGuide: join(dir, 'UPLOAD.md'),
         slug,
+        upload: { title: metadata.title, description: metadata.description, tags: metadata.tags },
         artifact: null, // video files are not sent to executors or webhooks
       });
       video.approval = item.id;

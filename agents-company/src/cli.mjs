@@ -19,9 +19,10 @@ import { Studio } from './studio/studio.mjs';
 import { StudioMemory } from './studio/memory.mjs';
 import { MockMediaClient, mediaFromConfig } from './studio/media.mjs';
 import { hasFfmpeg } from './studio/ffmpeg.mjs';
+import { startAuth, finishAuth, waitForRedirect } from './youtube/oauth.mjs';
 import { mailerFromConfig } from './email/resend.mjs';
 import { welcomeEmail } from './email/templates.mjs';
-import { loadConfig, validateConfig, validateStudioConfig, signupOrigins } from './config.mjs';
+import { loadConfig, validateConfig, validateStudioConfig, validateYouTubeConfig, signupOrigins } from './config.mjs';
 import { MetricsStore, metricsFromConfig } from './feedback/metrics.mjs';
 import { collectResults } from './feedback/traction.mjs';
 import { LLMClient } from './llm.mjs';
@@ -35,7 +36,7 @@ import { buildExecutors, siteFromConfig } from './executors/index.mjs';
 import { publisherFromConfig } from './executors/github-pages.mjs';
 import { createWebhookServer } from './executors/webhook-server.mjs';
 
-const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test', 'studio', 'studio-list', 'studio-results'];
+const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test', 'studio', 'studio-list', 'studio-results', 'youtube-auth'];
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -54,6 +55,8 @@ const { positionals, values } = parseArgs({
     'viewed-pct': { type: 'string' },
     'avg-view-seconds': { type: 'string' },
     url: { type: 'string' },
+    redirect: { type: 'string' },
+    privacy: { type: 'string' },
     focus: { type: 'string' },
     opportunities: { type: 'string', short: 'n' },
     concurrency: { type: 'string', short: 'c' },
@@ -89,6 +92,8 @@ if (values.help || !COMMANDS.includes(command)) {
   signups:    counts per page; [--export] [page] prints CSV with emails; [--delete email] erases a person
   email-test: <to-address>  send one test email through Resend
   studio:     [--niche "..."] [--videos 2] [--mock]   make YouTube Shorts for review
+  youtube-auth: connect YouTube once (opens Google consent); [--redirect URL] to finish on a headless server
+  execute:    also uploads approved Shorts to YouTube when connected; [--privacy public|unlisted|private]
   studio-list / studio-results <slug> [--views N] [--likes N] [--comments N] [--subscribers N]
               [--viewed-pct N] [--avg-view-seconds N] [--url https://youtube.com/shorts/…]
   common:     [--data-dir DIR]
@@ -102,7 +107,9 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_TRUST_PROXY=1, AGENTS_METRICS_SOURCE=local, AGENTS_MIN_VIEWS, AGENTS_TARGET_CONVERSION,
      RESEND_API_KEY, AGENTS_EMAIL_FROM, AGENTS_EMAIL_REPLY_TO, AGENTS_POSTAL_ADDRESS, AGENTS_DOUBLE_OPT_IN=0,
      AGENTS_EMAIL_MAX_RECIPIENTS, AGENTS_CHANNEL_NICHE, AGENTS_CHANNEL_NAME, AGENTS_CHANNEL_LINK, AGENTS_CHANNEL_CTA,
-     AGENTS_STUDIO_VIDEOS, AGENTS_MEDIA_BASE_URL, AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_TTS_VOICE, AGENTS_IMAGE_MODEL`);
+     AGENTS_STUDIO_VIDEOS, AGENTS_MEDIA_BASE_URL, AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_TTS_VOICE, AGENTS_IMAGE_MODEL,
+     YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN, AGENTS_YOUTUBE_PRIVACY, AGENTS_YOUTUBE_SYNTHETIC=0,
+     AGENTS_YOUTUBE_AUTH_PORT`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -128,6 +135,7 @@ const config = loadConfig({
   signupUrl: values['signup-url'],
   channelNiche: values.niche,
   studioVideos: values.videos,
+  youtubePrivacy: values.privacy,
 });
 const memory = new CompanyMemory(config.dataDir);
 const approvals = new ApprovalQueue(config.dataDir);
@@ -296,6 +304,27 @@ switch (command) {
     }
     break;
   }
+  case 'youtube-auth': {
+    try {
+      const creds = { clientId: config.youtubeClientId, clientSecret: config.youtubeClientSecret, dataDir: config.dataDir };
+      if (values.redirect) {
+        await finishAuth({ ...creds, redirectedUrl: values.redirect });
+      } else {
+        const { url } = startAuth({ ...creds, port: config.youtubeAuthPort });
+        console.log(`Open this link in a browser on this machine and allow "Manage your YouTube videos" (upload only):\n\n${url}\n`);
+        console.log(`Waiting for Google to redirect to 127.0.0.1:${config.youtubeAuthPort} …`);
+        console.log('On a server without a browser: open the link anywhere, then copy the URL the browser ends on (it starts with');
+        console.log(`http://127.0.0.1:${config.youtubeAuthPort}/oauth2callback?…, the page itself will not load) and run:`);
+        console.log('  node src/cli.mjs youtube-auth --redirect "<that URL>"\n');
+        await waitForRedirect({ port: config.youtubeAuthPort, onUrl: (u) => finishAuth({ ...creds, redirectedUrl: u }) });
+      }
+      console.log(`YouTube connected. Approved Shorts will be uploaded as ${config.youtubePrivacy} by \`execute\` and the daemon.`);
+    } catch (err) {
+      console.error(`YouTube sign-in failed: ${err.message}`);
+      process.exit(1);
+    }
+    break;
+  }
   case 'email-test': {
     const to = ids[0];
     if (!to) {
@@ -322,7 +351,10 @@ switch (command) {
     console.log(`Environment: ${config.environment}${config.mock ? ' (mock)' : ''}`);
     console.log(`LLM:    ${config.provider} · ${config.baseUrl || '(no URL)'} · model ${config.model || '(none)'}${strong} · key ${config.apiKey ? 'set' : 'missing'}`);
     console.log(`Search: ${config.searchProvider}${config.searchUrl ? ` · ${config.searchUrl}` : ''} · key ${searchKey}`);
-    warnings.forEach((w) => console.log(`warning: ${w}`));
+    console.log(`YouTube: ${config.youtubeAutoUpload ? `connected · uploads as ${config.youtubePrivacy}${config.youtubeSynthetic ? ' · AI disclosure on' : ''}` : config.youtubeClientId ? 'client set, not connected (run youtube-auth)' : 'manual upload'}`);
+    const yt = validateYouTubeConfig(config);
+    [...warnings, ...yt.warnings].forEach((w) => console.log(`warning: ${w}`));
+    errors.push(...yt.errors);
     errors.forEach((e) => console.log(`error:   ${e}`));
     if (!errors.length) console.log('OK');
     process.exit(errors.length ? 1 : 0);

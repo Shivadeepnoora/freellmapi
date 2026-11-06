@@ -5,6 +5,9 @@ import { publishLandingPage } from './webhook-server.mjs';
 import { mailerFromConfig } from '../email/resend.mjs';
 import { canBroadcast, sendBroadcast } from '../email/broadcast.mjs';
 import { MetricsStore } from '../feedback/metrics.mjs';
+import { GoogleAuth, refreshTokenFrom } from '../youtube/oauth.mjs';
+import { YouTubeUploader, youtubeExecutor } from '../youtube/upload.mjs';
+import { StudioMemory } from '../studio/memory.mjs';
 
 // What published pages and emails need to know about the business.
 export function siteFromConfig(config) {
@@ -42,6 +45,17 @@ export function buildExecutors(config, { fetchImpl, log } = {}) {
       canHandle: canBroadcast,
       execute: (action, content) => sendBroadcast({ store, mailer, action, content, site, maxRecipients: config.emailMaxRecipients, log }),
     });
+  }
+  if (config.youtubeAutoUpload) {
+    const auth = new GoogleAuth({ clientId: config.youtubeClientId, clientSecret: config.youtubeClientSecret, refreshToken: refreshTokenFrom(config), fetchImpl });
+    executors.push(youtubeExecutor({
+      uploader: new YouTubeUploader({ auth, fetchImpl }),
+      memory: new StudioMemory(config.dataDir),
+      dataDir: config.dataDir,
+      privacyStatus: config.youtubePrivacy,
+      syntheticMedia: config.youtubeSynthetic,
+      log,
+    }));
   }
   return executors;
 }

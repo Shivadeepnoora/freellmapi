@@ -5,6 +5,8 @@
 // OpenAI-compatible API and a paid search API, and set AGENTS_ENV=production
 // so the company refuses to run on free tiers by accident.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { validateSignupUrl } from './site/signup.mjs';
 
 export const LLM_PROVIDERS = {
@@ -99,6 +101,15 @@ export function loadConfig(overrides = {}, env = process.env) {
     ttsVoice: env.AGENTS_TTS_VOICE ?? 'alloy',
     imageModel: env.AGENTS_IMAGE_MODEL ?? 'auto',
 
+    // YouTube upload after approval
+    youtubeClientId: env.YOUTUBE_CLIENT_ID ?? '',
+    youtubeClientSecret: env.YOUTUBE_CLIENT_SECRET ?? '',
+    youtubeRefreshToken: env.YOUTUBE_REFRESH_TOKEN ?? '',
+    youtubePrivacy: pick('youtubePrivacy', 'AGENTS_YOUTUBE_PRIVACY', 'public'),
+    youtubeSynthetic: env.AGENTS_YOUTUBE_SYNTHETIC !== '0',
+    youtubeAuthPort: Number(env.AGENTS_YOUTUBE_AUTH_PORT ?? 8976),
+    get youtubeAutoUpload() { return Boolean(this.youtubeClientId && (this.youtubeRefreshToken || existsSync(join(this.dataDir, 'youtube-token.json')))); },
+
     minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
     targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
     intervalMs: parseInterval(pick('interval', 'AGENTS_INTERVAL', '24h')),
@@ -180,6 +191,16 @@ export function validateStudioConfig(config) {
     if (!config.mediaApiKey) warnings.push('FREELLMAPI_API_KEY is not set, so media requests will be refused.');
   }
   if (!config.channelLink) warnings.push('AGENTS_CHANNEL_LINK is not set: descriptions will not point viewers to your newsletter or offer, which is how a new channel earns before monetization.');
+  errors.push(...validateYouTubeConfig(config).errors);
+  return { errors, warnings };
+}
+
+export function validateYouTubeConfig(config) {
+  const errors = [];
+  const warnings = [];
+  if (!['public', 'unlisted', 'private'].includes(config.youtubePrivacy)) errors.push(`AGENTS_YOUTUBE_PRIVACY must be public, unlisted or private (got "${config.youtubePrivacy}")`);
+  if (config.youtubeClientId && !config.youtubeClientSecret) warnings.push('YOUTUBE_CLIENT_SECRET is not set; Google requires it for "Desktop app" OAuth clients.');
+  if (config.youtubeClientId && !config.youtubeAutoUpload) warnings.push('YouTube is not connected yet: run `node src/cli.mjs youtube-auth` once. Until then, approved videos are marked for manual upload.');
   return { errors, warnings };
 }
 
