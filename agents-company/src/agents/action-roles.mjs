@@ -9,9 +9,12 @@ export const FILE_AGENTS = [
     title: 'Product Builder',
     file: 'landing-page.html',
     system: `ROLE: product_builder
-You build a single-file landing page (HTML with inline CSS, no external scripts) for one income
-opportunity: headline, problem, solution, 3 benefits, pricing placeholder, email signup form
-(action="#"), FAQ. Honest copy; no fake testimonials, fake numbers, or fake logos.
+You build a single-file landing page (HTML with inline CSS, no scripts at all) for one income
+opportunity: headline, problem, solution, 3 benefits, pricing placeholder, FAQ, and exactly one
+email signup form written as <form data-signup><input type="email" name="email" required>
+<button type="submit">…</button></form>. Signup handling, consent and the privacy link are added
+automatically when the page is published; do not add them. Honest copy; no fake testimonials,
+fake numbers, or fake logos.
 Reply with the HTML document only.`,
   },
   {

@@ -5,7 +5,9 @@ sub-agents for analysis, ranks the results, has a CEO agent decide what to do ne
 **acts**: action agents build real deliverables for the top ideas and plan the next 14 days.
 Anything that touches the outside world waits for your approval. It can
 run on a schedule and keeps a memory between runs. Research is based on **live web search**, and
-every claim cites its source.
+every claim cites its source. Published landing pages **collect real signups**, and each run
+**learns from those results**: winners are scaled, losers are dropped, and new ideas follow what
+converts.
 
 It works with any OpenAI-compatible LLM API. FreeLLMAPI (free tiers) is the default for testing.
 For the real business, switch to paid providers and set `AGENTS_ENV=production`; see
@@ -47,10 +49,13 @@ No dependencies beyond Node ≥ 20.
 
 One cycle:
 
+0. **Read market results**: views and signups for every landing page already live are scored
+   and given a verdict (scale, iterate, kill, or collecting data). See
+   [Signups and the feedback loop](#signups-and-the-feedback-loop).
 1. **Research**: the Research Planner writes web searches about current demand, trends and
    pricing. The results become numbered sources. The Research Director proposes `N` legal,
-   low-capital income sources based on them, citing source ids. Ideas already in memory are
-   excluded, so each run finds new ones.
+   low-capital income sources based on them and on what is converting, citing source ids. Ideas
+   already in memory are excluded, so each run finds new ones.
 2. **Gather evidence**: each opportunity gets two targeted searches (market size and demand,
    competitors and pricing). The results go to all of its departments.
 3. **Distribute**: every opportunity × department pair becomes a sub-agent task, run through a
@@ -59,8 +64,9 @@ One cycle:
 4. **Rank**: scores are averaged across all five departments. A missing report counts as 0, so a
    half-analysed idea can't outrank a fully analysed one. An idea where no agent cited any source
    is flagged **⚠ unverified**.
-5. **Decide**: the CEO reads the ranking plus the best ideas from memory and writes priorities
-   and next actions.
+5. **Decide**: the CEO reads the ranking, the live results and the best ideas from memory. It
+   writes priorities, next actions, and a decision for each launched idea. Real results outweigh
+   any agent's opinion.
 6. **Act**: for the top ideas (`--execute-top`, default 2), the action agents write their
    deliverables to `data/workspace/<run>/<idea>/`. The Operations Manager then writes a 14-day
    plan. Internal tasks are done by agents. External tasks (publish, send email, post, sign up,
@@ -208,6 +214,89 @@ at 1 MB, and the target path is always `<slug>/index.html`. If Pages can't be en
 automatically (for example the token lacks the Pages permission), the commit still lands. A
 warning tells you to turn it on under repo Settings → Pages.
 
+## Signups and the feedback loop
+
+A landing page is only useful if it tells you whether people want the thing. So each published
+page collects email signups and counts visits. Every run then reads those numbers and adjusts.
+
+### How a page collects signups
+
+When an approved landing page is published, the publisher prepares it:
+
+- **Removes every script the model wrote**, so only our own reviewed code runs on your public page.
+- **Adds a small signup script.** It connects the page's email form to your `/signup` endpoint,
+  adds a required consent checkbox with a link to the privacy notice, adds a hidden spam trap,
+  and sends one anonymous page-view beacon to `/event`.
+- **Publishes `privacy.html` next to the page**, stating who runs it (`AGENTS_BUSINESS_NAME`), how
+  to reach you (`AGENTS_CONTACT_EMAIL`), what is stored, and how to get data deleted. It's a
+  starting template, not legal advice, so have it checked for your country.
+
+The `webhook-server` stores the signups. It now also serves the public endpoints, so it has to be
+reachable on a **public HTTPS address**. GitHub Pages is HTTPS, and browsers block form posts
+from it to plain HTTP. A reverse proxy with a certificate works, as does a tunnel such as
+Cloudflare Tunnel.
+
+```bash
+# on the server (the same machine can run the company too)
+export AGENTS_WEBHOOK_SECRET=<random 16+ chars>
+export AGENTS_GITHUB_PAGES_REPO=yourname/launches AGENTS_GITHUB_TOKEN=<token>
+export AGENTS_SIGNUP_URL=https://signup.yourdomain.com      # this server's public address
+export AGENTS_BUSINESS_NAME="Your Business" AGENTS_CONTACT_EMAIL=you@yourdomain.com
+export AGENTS_TRUST_PROXY=1                                  # only if behind a reverse proxy/tunnel
+node src/cli.mjs webhook-server --port 8787
+```
+
+| Endpoint | Who calls it | Protection |
+|---|---|---|
+| `POST /signup` | visitors' browsers | allowed origins only (default `https://<owner>.github.io`, or `AGENTS_SIGNUP_ALLOWED_ORIGINS`), consent required, email validated, honeypot, 10/hour per client, 4 KB body limit |
+| `POST /event` | visitors' browsers | same origin check, 300/hour per client, counts views per day only |
+| `GET /stats` | the company | `x-agents-secret`; returns counts, never emails |
+
+**Privacy by design.** Email addresses are stored only in `data/signups.json` on the server.
+Reports, memory and every LLM prompt only see counts (`data/metrics.json`). View counting stores
+no IP address or identifier. Duplicate signups are ignored. Rate limiting uses the client
+address in memory only.
+
+Manage signups (on the machine running `webhook-server`):
+
+```bash
+node src/cli.mjs signups                       # views and signups per page
+node src/cli.mjs signups --export my-idea      # CSV with emails, for your email tool
+node src/cli.mjs signups --delete a@b.com      # erase a person on request
+```
+
+### How results steer the company
+
+At the start of every run (and with `node src/cli.mjs results`), each launched page is scored:
+
+| | Rule (defaults) |
+|---|---|
+| conversion | signups ÷ views |
+| traction score | `10 × conversion ÷ 5%`, capped at 10 (1% → 2, 3% → 6, 5%+ → 10) |
+| **collecting data** | fewer than 100 views, too early to judge |
+| **🟢 scale** | traction ≥ 7 |
+| **🟡 iterate** | traction 3–7 |
+| **🔴 kill** | traction < 3 after 100+ views |
+
+Tune with `AGENTS_MIN_VIEWS` and `AGENTS_TARGET_CONVERSION`. The results are then used in four
+places:
+
+1. **Research Director**: proposes new ideas close to what converts and avoids the patterns of killed ideas.
+2. **CEO**: makes a decision for every launched idea. Grow the scale ones, say what to change on
+   the iterate ones, stop the kill ones, and get traffic to the ones still collecting data. These
+   decisions appear in the report.
+3. **Long-term ranking**: memory blends the agents' score with the traction score 50/50, so an
+   idea that looked great on paper but that nobody signed up for drops below one that converts.
+4. **Report**: a *Live results* table with views, signups, conversion, traction and verdict per page.
+
+The company reads results from the server's `GET /stats` when `AGENTS_SIGNUP_URL` and
+`AGENTS_WEBHOOK_SECRET` are set. Otherwise it reads its local `data/metrics.json`, or you can force
+that with `AGENTS_METRICS_SOURCE=local`. Pages need traffic to produce a verdict, so posting the
+approved launch content is what makes the loop turn.
+
+`check` warns, and in production refuses to run, when pages would be published without signup
+capture or without the business name and contact email the privacy notice needs.
+
 ## Automate it
 
 Built-in scheduler. Each cycle first sends out whatever you approved since the last cycle, then
@@ -259,6 +348,12 @@ node src/cli.mjs memory
 | `--pages-branch` | `AGENTS_GITHUB_PAGES_BRANCH` | `gh-pages` |
 | (env only) | `AGENTS_GITHUB_TOKEN` / `GITHUB_TOKEN` | — |
 | (env only) | `AGENTS_GITHUB_API_URL` | `https://api.github.com` (set for GitHub Enterprise) |
+| `--signup-url` | `AGENTS_SIGNUP_URL` | — (pages don't collect signups) |
+| (env only) | `AGENTS_SIGNUP_ALLOWED_ORIGINS` | `https://<pages owner>.github.io` |
+| (env only) | `AGENTS_BUSINESS_NAME` / `AGENTS_CONTACT_EMAIL` | — (required in production with signups) |
+| (env only) | `AGENTS_TRUST_PROXY=1` | off (use the socket address for rate limits) |
+| (env only) | `AGENTS_METRICS_SOURCE=local` | auto (remote `/stats` when signup URL + secret are set) |
+| (env only) | `AGENTS_MIN_VIEWS` / `AGENTS_TARGET_CONVERSION` | `100` / `0.05` |
 
 ## Extend it
 

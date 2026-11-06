@@ -35,6 +35,8 @@ export function toMarkdown(run) {
     `**Next actions**`,
     list(run.decision?.next_actions),
     ``,
+    ...launchedDecisions(run.decision?.launched_ideas),
+    ...resultsSection(run.results),
     `## Ranking`,
     ``,
     `| # | Opportunity | Category | Score | Evidence | ${DEPARTMENTS.map((d) => d.title).join(' | ')} |`,
@@ -81,6 +83,29 @@ export function toMarkdown(run) {
     lines.push(`- Web searches: ${u.searches ?? 0}`, ``);
   }
   return lines.join('\n');
+}
+
+export function resultsSection(results) {
+  if (!results?.length) return [];
+  return [
+    `## Live results`,
+    ``,
+    `Real visitors and signups on launched landing pages (counts only, no emails).`,
+    ``,
+    `| Opportunity | Page | Days live | Views | Signups | Conversion | Traction | Verdict |`,
+    `|---|---|---|---|---|---|---|---|`,
+    ...results.map((r) => `| ${r.opportunity} | [${r.page}](${r.url}) | ${r.daysLive} | ${r.views} | ${r.signups} | ${(r.conversion * 100).toFixed(1)}% | ${r.tractionScore ?? '—'} | ${verdictLabel(r.verdict)} |`),
+    ``,
+  ];
+}
+
+function launchedDecisions(items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  return [`**Decisions on launched ideas**`, ...items.filter((i) => i?.opportunity).map((i) => `- ${i.opportunity} (${verdictLabel(i.verdict)}): ${i.decision ?? ''}`), ``];
+}
+
+function verdictLabel(v) {
+  return { scale: '🟢 scale', iterate: '🟡 iterate', kill: '🔴 kill', 'collecting data': '⏳ collecting data' }[v] ?? v ?? '—';
 }
 
 function researchBanner(run) {

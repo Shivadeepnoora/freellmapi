@@ -23,6 +23,7 @@ export class CompanyMemory {
       const key = r.name.toLowerCase();
       const prev = this.state.opportunities[key];
       this.state.opportunities[key] = {
+        ...prev, // keep traction and history recorded earlier
         name: r.name,
         category: r.category,
         lastScore: r.totalScore,
@@ -44,8 +45,27 @@ export class CompanyMemory {
     }));
   }
 
+  // Stores the latest live results on each launched opportunity. Counts only:
+  // emails never reach memory (or the LLM prompts built from it).
+  recordResults(results, at = new Date().toISOString()) {
+    for (const r of results) {
+      const key = r.opportunity.toLowerCase();
+      const prev = this.state.opportunities[key] ?? { name: r.opportunity, category: 'uncategorised', lastScore: 0, timesSeen: 0 };
+      const traction = { views: r.views, signups: r.signups, conversion: r.conversion, tractionScore: r.tractionScore, verdict: r.verdict, url: r.url, at };
+      this.state.opportunities[key] = { ...prev, traction, tractionHistory: [...(prev.tractionHistory ?? []), traction].slice(-30) };
+    }
+    if (results.length) this.save();
+  }
+
+  // Ranking that blends what the agents thought (lastScore) with what the
+  // market did (tractionScore) once there is enough data. Market evidence
+  // counts as much as the whole analysis.
   topOpportunities(n = 5) {
-    return Object.values(this.state.opportunities).sort((a, b) => b.lastScore - a.lastScore).slice(0, n);
+    return Object.values(this.state.opportunities)
+      .map((o) => ({ ...o, combinedScore: combinedScore(o) }))
+      .sort((a, b) => b.combinedScore - a.combinedScore)
+      .slice(0, n)
+      .map(({ tractionHistory, ...o }) => o);
   }
 
   save() {
@@ -53,4 +73,9 @@ export class CompanyMemory {
     writeFileSync(tmp, JSON.stringify(this.state, null, 2));
     renameSync(tmp, this.file);
   }
+}
+
+export function combinedScore(o) {
+  const t = o.traction?.tractionScore;
+  return t == null ? o.lastScore : Math.round(((o.lastScore + t) / 2) * 10) / 10;
 }

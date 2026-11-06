@@ -162,7 +162,7 @@ test('webhook server end to end: secret check, publish, then the queue records t
     const bad = await fetch(url, { method: 'POST', headers: { 'x-agents-secret': 'wrong' }, body: '{}' });
     assert.equal(bad.status, 401);
     const health = await (await fetch(`${url}healthz`)).json();
-    assert.deepEqual(health, { ok: true, githubPages: true });
+    assert.deepEqual(health, { ok: true, githubPages: true, signups: false });
 
     const { q, publish } = queueWithPage('<h1>Via webhook</h1>');
     q.decide([publish.id], 'approved');

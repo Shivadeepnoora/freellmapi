@@ -6,7 +6,7 @@
 // (fine-grained PAT), or the `repo` scope (classic PAT).
 
 const REPO_RE = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
-const PAGE_PATH_RE = /^[a-z0-9-]{1,60}\/index\.html$/;
+const PAGE_PATH_RE = /^[a-z0-9-]{1,60}\/(index|privacy)\.html$/;
 export const MAX_PAGE_BYTES = 1_000_000;
 
 export class GitHubPagesPublisher {

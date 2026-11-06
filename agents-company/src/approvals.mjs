@@ -98,6 +98,8 @@ export class ApprovalQueue {
   #finish(item, status, result) {
     Object.assign(item, { status, executedAt: new Date().toISOString() });
     if (result?.url) item.resultUrl = result.url;
+    if (result?.page) item.page = result.page;
+    if (result?.signupCapture !== undefined) item.signupCapture = result.signupCapture;
     if (result?.reason) item.note = result.reason;
     delete item.error;
   }

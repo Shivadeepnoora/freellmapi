@@ -11,7 +11,7 @@ const SAMPLE = [
 ];
 
 const FILES = {
-  product_builder: '```html\n<!doctype html><html><head><title>Launch</title></head><body><h1>Coming soon</h1><form action="#"><input type="email"><button>Join</button></form></body></html>\n```',
+  product_builder: '```html\n<!doctype html><html><head><title>Launch</title></head><body><h1>Coming soon</h1><form data-signup><input type="email" name="email" required><button type="submit">Join</button></form></body></html>\n```',
   content_writer: '# Launch post\n\nWhy this matters...\n\n## Social posts\n1. We are building something.',
   sales_rep: '# Outreach\n\nHi {{first_name}}, ...\n\nReply STOP to opt out.',
   automation_builder: '// Generates weekly content drafts locally.\nconsole.log("draft written");',

@@ -5,6 +5,8 @@
 // OpenAI-compatible API and a paid search API, and set AGENTS_ENV=production
 // so the company refuses to run on free tiers by accident.
 
+import { validateSignupUrl } from './site/signup.mjs';
+
 export const LLM_PROVIDERS = {
   freellmapi: { baseUrl: 'http://localhost:3001/v1', keyEnv: 'FREELLMAPI_API_KEY', model: 'auto', freeTier: true },
   openai: { baseUrl: 'https://api.openai.com/v1', keyEnv: 'OPENAI_API_KEY', model: null, freeTier: false },
@@ -68,6 +70,16 @@ export function loadConfig(overrides = {}, env = process.env) {
     githubToken: env.AGENTS_GITHUB_TOKEN ?? env.GITHUB_TOKEN ?? '',
     githubApiUrl: env.AGENTS_GITHUB_API_URL ?? 'https://api.github.com',
     webhookPort: Number(pick('port', 'AGENTS_WEBHOOK_PORT', 8787)),
+
+    // Signup capture and the feedback loop
+    signupUrl: pick('signupUrl', 'AGENTS_SIGNUP_URL', '').replace(/\/$/, ''),
+    signupAllowedOrigins: splitList(pick('signupAllowedOrigins', 'AGENTS_SIGNUP_ALLOWED_ORIGINS', '')),
+    businessName: env.AGENTS_BUSINESS_NAME ?? '',
+    contactEmail: env.AGENTS_CONTACT_EMAIL ?? '',
+    trustProxy: env.AGENTS_TRUST_PROXY === '1',
+    metricsSource: env.AGENTS_METRICS_SOURCE ?? 'auto',
+    minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
+    targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
     intervalMs: parseInterval(pick('interval', 'AGENTS_INTERVAL', '24h')),
   };
 }
@@ -96,9 +108,21 @@ export function validateConfig(config) {
     if (!config.searchApiKey && config.searchProvider !== 'freellmapi') errors.push(`${search.keyEnv} is not set for search provider "${config.searchProvider}"`);
   }
 
+  // Signup capture: published pages should collect emails, lawfully.
+  const prod = config.environment === 'production';
+  if (config.signupUrl) {
+    try { validateSignupUrl(config.signupUrl); } catch (err) { errors.push(err.message); }
+    if (!config.businessName || !config.contactEmail) {
+      (prod ? errors : warnings).push('Set AGENTS_BUSINESS_NAME and AGENTS_CONTACT_EMAIL: the privacy notice published with each page must say who you are and how to reach you.');
+    }
+    if (!signupOrigins(config).length) warnings.push('No allowed signup origins: set AGENTS_GITHUB_PAGES_REPO or AGENTS_SIGNUP_ALLOWED_ORIGINS, or every signup will be refused.');
+  } else if (config.githubPagesRepo) {
+    (prod ? errors : warnings).push('AGENTS_SIGNUP_URL is not set: published landing pages will not collect signups, so there is no feedback to learn from. Run `webhook-server` on a public HTTPS address and set AGENTS_SIGNUP_URL to it.');
+  }
+
   // FreeLLMAPI's README: "for personal experimentation and learning, not
   // production … swap in a paid API before you ship". Enforce that in production.
-  if (config.environment === 'production' && !config.allowFreeTier) {
+  if (prod && !config.allowFreeTier) {
     if (preset?.freeTier) errors.push('AGENTS_ENV=production but the LLM provider is FreeLLMAPI (free tiers are not meant for production). Switch AGENTS_LLM_PROVIDER to a paid API, or set AGENTS_ALLOW_FREE_TIER=1 to override.');
     if (search?.freeTier) errors.push('AGENTS_ENV=production but web search goes through FreeLLMAPI free tiers. Set AGENTS_SEARCH=tavily (or custom), or AGENTS_ALLOW_FREE_TIER=1 to override.');
     if (config.searchProvider === 'off') errors.push('AGENTS_ENV=production requires live web search so decisions are based on sources. Configure AGENTS_SEARCH.');
@@ -106,6 +130,18 @@ export function validateConfig(config) {
     warnings.push('Running on FreeLLMAPI free tiers: fine for testing, but switch to paid providers (and set AGENTS_ENV=production) before relying on this for the business.');
   }
   return { errors, warnings };
+}
+
+// Origins allowed to post signups: the explicit list, else the GitHub Pages
+// site of the configured repo (https://<owner>.github.io).
+export function signupOrigins(config) {
+  if (config.signupAllowedOrigins.length) return config.signupAllowedOrigins;
+  const owner = config.githubPagesRepo?.split('/')[0];
+  return owner ? [`https://${owner.toLowerCase()}.github.io`] : [];
+}
+
+function splitList(value) {
+  return String(value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 export function parseInterval(value) {

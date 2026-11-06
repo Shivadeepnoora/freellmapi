@@ -3,15 +3,22 @@
 // own targeted searches and is sent to every department sub-agent (in
 // parallel, with a concurrency cap), scores are aggregated and ranked, and the
 // CEO writes the decision memo. Every claim cites a source id (S1, S2, …).
+//
+// Feedback loop: each run starts by reading the real results (views, signups)
+// of every landing page already launched. Those results steer the Research
+// Director and the CEO, and are stored in memory where they blend into the
+// long-term ranking.
 import { RESEARCH_PLANNER, RESEARCH_DIRECTOR, DEPARTMENTS, CEO } from './agents/roles.mjs';
 import { SourceLibrary, gather } from './search.mjs';
 import { runPool } from './pool.mjs';
 import { ExecutionTeam } from './execution.mjs';
+import { collectResults, resultsForPrompt } from './feedback/traction.mjs';
 
 export class Company {
-  constructor({ llm, memory, config, approvals = null, search = null, log = () => {} }) {
+  constructor({ llm, memory, config, approvals = null, search = null, metrics = null, log = () => {} }) {
     this.llm = llm;
     this.search = search;
+    this.metrics = metrics;
     this.approvals = approvals;
     this.memory = memory;
     this.config = config;
@@ -27,6 +34,14 @@ export class Company {
     const library = new SourceLibrary();
     const known = this.memory.knownOpportunityNames();
     const avoid = known.length ? `\nAlready researched in earlier runs (find NEW ones): ${known.join('; ')}` : '';
+
+    // 0. Market feedback from pages already live
+    const marketResults = await collectResults({ approvals: this.approvals, metrics: this.metrics, config: this.config, log: this.log });
+    if (marketResults.length) {
+      this.memory.recordResults(marketResults);
+      this.log(`[Results] ${marketResults.length} live pages: ${marketResults.map((r) => `${r.opportunity} → ${r.verdict}`).join('; ')}`);
+    }
+    const feedback = resultsForPrompt(marketResults);
 
     // 1a. Live web research
     if (this.search) {
@@ -46,7 +61,7 @@ export class Company {
     this.log(`[Research Director] proposing ${count} income sources from ${library.all().length} sources: ${focus}`);
     const research = await this.llm.chatJSON([
       { role: 'system', content: RESEARCH_DIRECTOR.system },
-      { role: 'user', content: `Focus: ${focus}\nReturn exactly ${count} distinct opportunities.${avoid}\n\n${library.toPrompt()}` },
+      { role: 'user', content: `Focus: ${focus}\nReturn exactly ${count} distinct opportunities.${avoid}\n\n${feedback}\n\n${library.toPrompt()}` },
     ], { tier: 'strong' });
     const opps = normaliseOpportunities(research, count).map((o) => ({ ...o, sources: library.validIds(o.sources) }));
     if (!opps.length) throw new Error('Research Director returned no opportunities');
@@ -94,7 +109,7 @@ export class Company {
     try {
       decision = await this.llm.chatJSON([
         { role: 'system', content: CEO.system },
-        { role: 'user', content: `Ranked opportunities with department reports:\n${JSON.stringify(ranked.map(compactForCeo), null, 2)}\n\nBest past opportunities from memory:\n${JSON.stringify(this.memory.topOpportunities())}\n\nActions from earlier runs (status):\n${JSON.stringify(this.memory.recentActions(10, this.approvals))}` },
+        { role: 'user', content: `Ranked opportunities with department reports:\n${JSON.stringify(ranked.map(compactForCeo), null, 2)}\n\n${feedback}\n\nBest past opportunities from memory (combinedScore blends analysis with market traction):\n${JSON.stringify(this.memory.topOpportunities())}\n\nActions from earlier runs (status):\n${JSON.stringify(this.memory.recentActions(10, this.approvals))}` },
       ], { temperature: 0.3, tier: 'strong' });
     } catch (err) {
       decision = { executive_summary: `CEO step failed: ${err.message}`, priorities: ranked.slice(0, 2).map((r) => r.name), next_actions: [] };
@@ -114,7 +129,7 @@ export class Company {
       sources: library.all().map(({ id, title, url }) => ({ id, title, url })),
     };
     const usage = { ...(this.llm.takeUsage?.() ?? {}), searches: (this.search?.count ?? 0) - searchesBefore, model: this.config.model, provider: this.config.provider };
-    Object.assign(run, { opportunities: opps, ranked, decision, execution, research: researchSummary, usage, finishedAt: new Date().toISOString() });
+    Object.assign(run, { opportunities: opps, ranked, decision, execution, research: researchSummary, results: marketResults, usage, finishedAt: new Date().toISOString() });
     this.memory.recordRun(run);
     return run;
   }
