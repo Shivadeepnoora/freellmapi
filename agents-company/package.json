@@ -1,0 +1,22 @@
+{
+  "name": "@freellmapi/agents-company",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A self-running company of AI agents: income research with specialist sub-agents, landing pages and email, and a YouTube Shorts studio, powered by any OpenAI-compatible API (FreeLLMAPI by default).",
+  "type": "module",
+  "bin": { "agents-company": "src/cli.mjs" },
+  "scripts": {
+    "check": "node src/cli.mjs check",
+    "demo-short": "node src/cli.mjs studio --mock --videos 1",
+    "first-short": "node src/cli.mjs studio --videos 1",
+    "youtube-auth": "node src/cli.mjs youtube-auth",
+    "approvals": "node src/cli.mjs approvals",
+    "execute": "node src/cli.mjs execute",
+    "studio-list": "node src/cli.mjs studio-list",
+    "daemon": "node src/cli.mjs daemon",
+    "start": "node src/cli.mjs run",
+    "demo": "node src/cli.mjs run --mock",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20.18.0" }
+}
