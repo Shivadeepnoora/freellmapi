@@ -15,6 +15,11 @@ export function loadConfig(overrides = {}) {
     executeTop: Number(overrides.executeTop ?? env.AGENTS_EXECUTE_TOP ?? 2),
     webhookUrl: overrides.webhookUrl ?? env.AGENTS_WEBHOOK_URL ?? '',
     webhookSecret: env.AGENTS_WEBHOOK_SECRET ?? '',
+    githubPagesRepo: overrides.githubPagesRepo ?? env.AGENTS_GITHUB_PAGES_REPO ?? '',
+    githubPagesBranch: overrides.githubPagesBranch ?? env.AGENTS_GITHUB_PAGES_BRANCH ?? 'gh-pages',
+    githubToken: env.AGENTS_GITHUB_TOKEN ?? env.GITHUB_TOKEN ?? '',
+    githubApiUrl: env.AGENTS_GITHUB_API_URL ?? 'https://api.github.com',
+    webhookPort: Number(overrides.port ?? env.AGENTS_WEBHOOK_PORT ?? 8787),
     intervalMs: parseInterval(overrides.interval ?? env.AGENTS_INTERVAL ?? '24h'),
   };
 }

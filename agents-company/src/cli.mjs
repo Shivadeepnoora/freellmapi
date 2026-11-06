@@ -5,6 +5,7 @@
 // agents-company approve <id|all> approve actions (optionally --note "...")
 // agents-company reject <id|all>  reject actions
 // agents-company execute          send approved actions to AGENTS_WEBHOOK_URL
+// agents-company webhook-server   receive approved actions over HTTP and publish pages to GitHub Pages
 // agents-company memory           print what the company remembers
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.mjs';
@@ -14,8 +15,11 @@ import { CompanyMemory } from './memory.mjs';
 import { ApprovalQueue } from './approvals.mjs';
 import { Company } from './company.mjs';
 import { writeReports } from './report.mjs';
+import { buildExecutors } from './executors/index.mjs';
+import { publisherFromConfig } from './executors/github-pages.mjs';
+import { createWebhookServer } from './executors/webhook-server.mjs';
 
-const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'memory'];
+const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory'];
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -30,6 +34,9 @@ const { positionals, values } = parseArgs({
     'base-url': { type: 'string' },
     'data-dir': { type: 'string' },
     webhook: { type: 'string' },
+    'pages-repo': { type: 'string' },
+    'pages-branch': { type: 'string' },
+    port: { type: 'string' },
     note: { type: 'string' },
     all: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
@@ -41,9 +48,12 @@ if (values.help || !COMMANDS.includes(command)) {
   console.log(`Usage: agents-company <${COMMANDS.join('|')}> [options]
   run/daemon: [--mock] [--no-act] [--execute-top 2] [--focus "..."] [-n 5] [-c 3] [--interval 24h] [--model auto] [--base-url URL]
   approvals:  [--all]            approve/reject: <id...|all> [--note "..."]
-  execute:    [--webhook URL]    common: [--data-dir DIR]
+  execute:    [--webhook URL] [--pages-repo owner/name] [--pages-branch gh-pages]
+  webhook-server: [--port 8787] [--pages-repo owner/name] [--pages-branch gh-pages]
+  common:     [--data-dir DIR]
 Env: FREELLMAPI_BASE_URL, FREELLMAPI_API_KEY, AGENTS_MODEL, AGENTS_FOCUS, AGENTS_INTERVAL, AGENTS_MOCK=1,
-     AGENTS_ACT=0, AGENTS_EXECUTE_TOP, AGENTS_WEBHOOK_URL, AGENTS_WEBHOOK_SECRET`);
+     AGENTS_ACT=0, AGENTS_EXECUTE_TOP, AGENTS_WEBHOOK_URL, AGENTS_WEBHOOK_SECRET, AGENTS_WEBHOOK_PORT,
+     AGENTS_GITHUB_PAGES_REPO, AGENTS_GITHUB_PAGES_BRANCH, AGENTS_GITHUB_TOKEN (or GITHUB_TOKEN)`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -59,12 +69,22 @@ const config = loadConfig({
   baseUrl: values['base-url'],
   dataDir: values['data-dir'],
   webhookUrl: values.webhook,
+  githubPagesRepo: values['pages-repo'],
+  githubPagesBranch: values['pages-branch'],
+  port: values.port,
 });
 const memory = new CompanyMemory(config.dataDir);
 const approvals = new ApprovalQueue(config.dataDir);
 const log = (msg) => console.log(`${new Date().toISOString()} ${msg}`);
 const ids = positionals.slice(1);
-const dispatch = () => approvals.dispatch({ webhookUrl: config.webhookUrl, webhookSecret: config.webhookSecret, log });
+let executors;
+try {
+  executors = buildExecutors(config, { log });
+} catch (err) {
+  console.error(`GitHub Pages is misconfigured: ${err.message}`);
+  process.exit(1);
+}
+const dispatch = () => approvals.dispatch({ webhookUrl: config.webhookUrl, webhookSecret: config.webhookSecret, executors, log });
 
 switch (command) {
   case 'memory':
@@ -77,7 +97,9 @@ switch (command) {
       const cost = i.costUsd ? ` ($${i.costUsd})` : '';
       const details = i.details ? ` — ${i.details}` : '';
       const file = i.artifact ? `\n        file: ${i.artifact}` : '';
-      console.log(`${i.id}  [${i.status}]  ${i.kind}${cost}  day ${i.day}  ${i.opportunity}\n        ${i.title}${details}${file}`);
+      const url = i.resultUrl ? `\n        live: ${i.resultUrl}` : '';
+      const err = i.error ? `\n        error: ${i.error}` : '';
+      console.log(`${i.id}  [${i.status}]  ${i.kind}${cost}  day ${i.day}  ${i.opportunity}\n        ${i.title}${details}${file}${url}${err}`);
     }
     break;
   }
@@ -100,6 +122,20 @@ switch (command) {
   case 'execute':
     await dispatch();
     break;
+  case 'webhook-server': {
+    const publisher = executors.length ? publisherFromConfig(config, { log }) : null;
+    let server;
+    try {
+      server = createWebhookServer({ publisher, secret: config.webhookSecret, log });
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    server.listen(config.webhookPort, () => {
+      log(`Webhook server listening on :${config.webhookPort} (GitHub Pages: ${publisher ? `${config.githubPagesRepo}@${config.githubPagesBranch}` : 'not configured'})`);
+    });
+    break;
+  }
   default:
     await runOrDaemon();
 }

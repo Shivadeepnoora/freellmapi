@@ -89,9 +89,56 @@ node src/cli.mjs approvals --all        # full history with statuses
 `x-agents-secret` header if `AGENTS_WEBHOOK_SECRET` is set. Point the URL at an n8n, Zapier or
 Make workflow, or your own service, that does the real work: deploy the landing page, schedule
 the posts, send the emails. Each action ends up `executed` or `failed`. Without a webhook,
-approved actions are marked `manual` and listed for you to do by hand.
+approved actions are marked `manual` and listed for you to do by hand. Before the webhook is
+tried, built-in executors get the first chance. GitHub Pages is one (below).
 
 To research without acting, pass `--no-act` or set `AGENTS_ACT=0`.
+
+## Publish landing pages to GitHub Pages
+
+Approved `publish` actions for a landing page can go live on GitHub Pages at
+`https://<owner>.github.io/<repo>/<idea-slug>/`. On the first publish the publisher creates the
+`gh-pages` branch from your default branch and turns Pages on. Republishing the same idea updates
+the page.
+
+**1. Make a repo and a token.** Create a public repo (e.g. `alice/launches`) with at least one
+commit, for example a README. Then create a
+[fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to that
+repo, with **Contents: read and write** and **Pages: read and write**.
+
+**2a. Built-in: no server needed.** `execute` and the daemon publish directly:
+
+```bash
+export AGENTS_GITHUB_PAGES_REPO=alice/launches
+export AGENTS_GITHUB_TOKEN=<token>
+node src/cli.mjs approve act-0001
+node src/cli.mjs execute
+node src/cli.mjs approvals --all     # shows "live: https://alice.github.io/launches/<idea>/"
+```
+
+**2b. As a webhook: run it on another machine.** The token then lives only on that machine:
+
+```bash
+# on the server
+export AGENTS_WEBHOOK_SECRET=<random string, 16+ chars>   # e.g. openssl rand -hex 24
+export AGENTS_GITHUB_PAGES_REPO=alice/launches AGENTS_GITHUB_TOKEN=<token>
+node src/cli.mjs webhook-server --port 8787
+
+# where the company runs
+export AGENTS_WEBHOOK_URL=https://your-host:8787/ AGENTS_WEBHOOK_SECRET=<same secret>
+node src/cli.mjs execute
+```
+
+The webhook server rejects requests without the right `x-agents-secret` and only publishes
+actions that are `approved`, of kind `publish`, and carry HTML content. It answers
+`{"status":"ignored"}` for anything else, and the company then marks that action `manual`.
+`GET /healthz` reports whether Pages is configured. Put it behind HTTPS (a reverse proxy or a
+tunnel) if it is reachable from the internet.
+
+Safety limits: the executor only reads artifacts from inside `data/workspace/`, pages are capped
+at 1 MB, and the target path is always `<slug>/index.html`. If Pages can't be enabled
+automatically (for example the token lacks the Pages permission), the commit still lands. A
+warning tells you to turn it on under repo Settings → Pages.
 
 ## Automate it
 
@@ -131,6 +178,11 @@ node src/cli.mjs memory
 | `--execute-top` | `AGENTS_EXECUTE_TOP` | `2` |
 | `--webhook` | `AGENTS_WEBHOOK_URL` | — (manual) |
 | (env only) | `AGENTS_WEBHOOK_SECRET` | — |
+| `--port` | `AGENTS_WEBHOOK_PORT` | `8787` |
+| `--pages-repo` | `AGENTS_GITHUB_PAGES_REPO` | — (off) |
+| `--pages-branch` | `AGENTS_GITHUB_PAGES_BRANCH` | `gh-pages` |
+| (env only) | `AGENTS_GITHUB_TOKEN` / `GITHUB_TOKEN` | — |
+| (env only) | `AGENTS_GITHUB_API_URL` | `https://api.github.com` (set for GitHub Enterprise) |
 
 ## Extend it
 
