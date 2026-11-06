@@ -33,8 +33,14 @@ export class MockLLMClient {
 
   #answer(role, user) {
     const count = Number(/exactly (\d+)/.exec(user)?.[1] ?? 5);
-    const avoid = user.toLowerCase();
+    const avoid = (user.split('<sources>')[0]).toLowerCase();
+    // Cite the first source offered, like a well-behaved model would.
+    const cite = /\[(S\d+)\]/.exec(user)?.[1];
+    const sources = cite ? [cite] : [];
+    const withSources = (obj) => ({ ...obj, sources });
     switch (role) {
+      case 'research_planner':
+        return { queries: Array.from({ length: count }, (_, i) => `income trend query ${i + 1}`) };
       case 'research_director':
         return {
           opportunities: SAMPLE.filter((s) => !avoid.includes(s.name.toLowerCase())).slice(0, count).map((s, i) => ({
@@ -44,18 +50,19 @@ export class MockLLMClient {
             why_now: 'Free AI tooling has cut the cost to start.',
             startup_cost_usd: 100 * (i + 1),
             time_to_first_revenue_weeks: 2 + i,
+            sources,
           })),
         };
       case 'market_analyst':
-        return { demand: 'medium', competition: 'medium', target_customer: 'small businesses', score: 7, evidence: ['Search interest growing'] };
+        return withSources({ demand: 'medium', competition: 'medium', target_customer: 'small businesses', score: 7, evidence: ['Search interest growing'] });
       case 'financial_analyst':
-        return { monthly_revenue_month_6_usd: 1500, monthly_costs_usd: 120, break_even_month: 3, score: 7, assumptions: ['2% conversion'] };
+        return withSources({ monthly_revenue_month_6_usd: 1500, monthly_costs_usd: 120, break_even_month: 3, score: 7, assumptions: ['2% conversion'] });
       case 'automation_engineer':
-        return { automatable_percent: 70, workflow: ['Research topics', 'Draft with LLM', 'Human review', 'Publish', 'Report metrics'], tools: ['FreeLLMAPI', 'cron'], score: 8 };
+        return withSources({ automatable_percent: 70, workflow: ['Research topics', 'Draft with LLM', 'Human review', 'Publish', 'Report metrics'], tools: ['FreeLLMAPI', 'cron'], score: 8 });
       case 'marketing_strategist':
-        return { channels: ['SEO', 'X/Twitter', 'Communities'], first_30_days: ['Launch landing page', 'Post 10 pieces'], score: 6 };
+        return withSources({ channels: ['SEO', 'X/Twitter', 'Communities'], first_30_days: ['Launch landing page', 'Post 10 pieces'], score: 6 });
       case 'risk_officer':
-        return { risks: ['Platform dependence'], legal_notes: ['Disclose affiliate links'], ethical_flags: [], score: 8 };
+        return withSources({ risks: ['Platform dependence'], legal_notes: ['Disclose affiliate links'], ethical_flags: [], score: 8 });
       case 'operations_manager':
         return {
           tasks: [
@@ -70,5 +77,17 @@ export class MockLLMClient {
       default:
         return { note: 'unknown role' };
     }
+  }
+}
+
+// Offline stand-in for web search: two deterministic results per query.
+export class MockSearchClient {
+  constructor() { this.count = 0; this.queries = []; }
+
+  async search(query) {
+    this.count++;
+    this.queries.push(query);
+    const slug = query.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    return [1, 2].map((n) => ({ title: `Result ${n} for ${query}`, url: `https://example.com/${slug}/${n}`, content: `Mock evidence ${n} about ${query}.` }));
   }
 }

@@ -4,8 +4,12 @@ A small company made of AI agents. It researches income sources, gives each one 
 sub-agents for analysis, ranks the results, has a CEO agent decide what to do next, and then
 **acts**: action agents build real deliverables for the top ideas and plan the next 14 days.
 Anything that touches the outside world waits for your approval. It can
-run on a schedule and keeps a memory between runs. All LLM calls go through
-FreeLLMAPI's OpenAI-compatible `/v1` endpoint, so it runs on free-tier models.
+run on a schedule and keeps a memory between runs. Research is based on **live web search**, and
+every claim cites its source.
+
+It works with any OpenAI-compatible LLM API. FreeLLMAPI (free tiers) is the default for testing.
+For the real business, switch to paid providers and set `AGENTS_ENV=production`; see
+[Testing vs production](#testing-vs-production).
 
 No dependencies beyond Node ≥ 20.
 
@@ -17,9 +21,13 @@ No dependencies beyond Node ≥ 20.
                          └──────┬───────┘
                                 │ ranked reports + memory
                 ┌───────────────┴────────────────┐
-                │      Research Director         │  finds N income sources
+                │      Research Director         │  proposes N income sources from the sources
                 └───────────────┬────────────────┘
-          each opportunity is sent to every department (in parallel)
+                ┌───────────────┴────────────────┐
+                │ Research Planner → web search  │  live sources S1, S2, … (Tavily-shaped API)
+                └───────────────┬────────────────┘
+     each opportunity gets its own searches (market/demand, competitors/pricing),
+          then is sent to every department with that evidence (in parallel)
    ┌─────────────┬──────────────┬───────────────┬───────────────┬─────────────┐
    │   Market    │  Financial   │  Automation   │   Marketing   │   Risk &    │
    │   Analyst   │   Analyst    │   Engineer    │   Strategist  │ Compliance  │
@@ -39,23 +47,30 @@ No dependencies beyond Node ≥ 20.
 
 One cycle:
 
-1. **Research**: the Research Director proposes `N` legal, low-capital income sources. Ideas
-   already in memory are excluded, so each run finds new ones.
-2. **Distribute**: every opportunity × department pair becomes a sub-agent task, run through a
+1. **Research**: the Research Planner writes web searches about current demand, trends and
+   pricing. The results become numbered sources. The Research Director proposes `N` legal,
+   low-capital income sources based on them, citing source ids. Ideas already in memory are
+   excluded, so each run finds new ones.
+2. **Gather evidence**: each opportunity gets two targeted searches (market size and demand,
+   competitors and pricing). The results go to all of its departments.
+3. **Distribute**: every opportunity × department pair becomes a sub-agent task, run through a
    worker pool (`--concurrency`) with retries and backoff on 429 or 5xx. If one department
    fails, its failure is recorded and the run continues.
-3. **Rank**: scores are averaged across all five departments. A missing report counts as 0, so a
-   half-analysed idea can't outrank a fully analysed one.
-4. **Decide**: the CEO reads the ranking plus the best ideas from memory and writes priorities
+4. **Rank**: scores are averaged across all five departments. A missing report counts as 0, so a
+   half-analysed idea can't outrank a fully analysed one. An idea where no agent cited any source
+   is flagged **⚠ unverified**.
+5. **Decide**: the CEO reads the ranking plus the best ideas from memory and writes priorities
    and next actions.
-5. **Act**: for the top ideas (`--execute-top`, default 2), the action agents write their
+6. **Act**: for the top ideas (`--execute-top`, default 2), the action agents write their
    deliverables to `data/workspace/<run>/<idea>/`. The Operations Manager then writes a 14-day
    plan. Internal tasks are done by agents. External tasks (publish, send email, post, sign up,
    spend money) go into the approval queue. If a task costs money or has an unrecognised
    external kind, it always needs approval, even when the model labels it internal.
-6. **Remember and report**: results and action statuses go to `data/memory.json`, so the next
+7. **Remember and report**: results and action statuses go to `data/memory.json`, so the next
    run's CEO knows what you approved or rejected. Reports go to
-   `data/reports/<run>.json`, `<run>.md` and `latest.md`.
+   `data/reports/<run>.json`, `<run>.md` and `latest.md`. Each report includes a numbered source
+   list with links, the citations for every department report, and LLM and search usage, with
+   an estimated cost if you set prices.
 
 ## Quick start
 
@@ -64,13 +79,66 @@ One cycle:
 node src/cli.mjs run --mock
 ```
 
-With real models, start FreeLLMAPI first (`npm run dev` at the repo root), add provider keys,
-and copy the unified API key from the Keys page:
+For testing with free models, start FreeLLMAPI first (`npm run dev` at the repo root). Add LLM
+keys plus at least one search engine key (Tavily, Exa, Brave, …) on the Keys page, then copy
+the unified API key:
 
 ```bash
 export FREELLMAPI_API_KEY=<unified key>
+node src/cli.mjs check
 node src/cli.mjs run --focus "passive income from developer tools" -n 5
 ```
+
+## Testing vs production
+
+FreeLLMAPI's own README says free tiers are *"for personal experimentation and learning, not
+production … If you build something real on top of FreeLLMAPI, swap in a paid API before you
+ship."* Provider terms for free tiers often restrict commercial use as well. So use FreeLLMAPI
+to try things out, and run the business on paid APIs.
+
+**LLM provider** (`AGENTS_LLM_PROVIDER`). All of these speak the OpenAI chat-completions format:
+
+| Provider | Base URL | Key env | Model |
+|---|---|---|---|
+| `freellmapi` (default) | `FREELLMAPI_BASE_URL` or `http://localhost:3001/v1` | `FREELLMAPI_API_KEY` | `auto` |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | required: `AGENTS_MODEL` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | required: `AGENTS_MODEL` |
+| `custom` | `AGENTS_LLM_BASE_URL` | `AGENTS_LLM_API_KEY` | required: `AGENTS_MODEL` |
+
+For paid providers there's no default model on purpose, because model names change. Pick one
+from your provider's model list. Optionally set `AGENTS_STRONG_MODEL` to a more capable model for
+the two decisions that matter most (Research Director and CEO). The ~30 department and action
+calls then use the cheaper `AGENTS_MODEL`.
+
+**Web search** (`AGENTS_SEARCH`). Both backends use Tavily's request and response format:
+
+| Search | Endpoint | Key env |
+|---|---|---|
+| `auto` (default) | `freellmapi` when the LLM provider is FreeLLMAPI, else `tavily` if `TAVILY_API_KEY` is set, else `off` | |
+| `freellmapi` | `<FreeLLMAPI>/v1/search`, which fails over across your search keys | `FREELLMAPI_API_KEY` |
+| `tavily` | `https://api.tavily.com/search` | `TAVILY_API_KEY` |
+| `custom` | `AGENTS_SEARCH_URL` (anything Tavily-compatible) | `AGENTS_SEARCH_API_KEY` |
+| `off` | model knowledge only; reports are marked unverified | |
+
+**Production mode.** With `AGENTS_ENV=production`, the run refuses to start if the LLM or search
+goes through FreeLLMAPI free tiers, or if search is off. The override is
+`AGENTS_ALLOW_FREE_TIER=1`. A production setup looks like:
+
+```bash
+export AGENTS_ENV=production
+export AGENTS_LLM_PROVIDER=openai OPENAI_API_KEY=<key> AGENTS_MODEL=<cheap model> AGENTS_STRONG_MODEL=<strong model>
+export TAVILY_API_KEY=<key>                      # search switches to tavily automatically
+export AGENTS_PRICE_INPUT_PER_MTOK=<$ per 1M input tokens> AGENTS_PRICE_OUTPUT_PER_MTOK=<$ per 1M output tokens>
+node src/cli.mjs check                           # prints the resolved setup; exits non-zero on problems
+```
+
+**Cost per run** (defaults: 5 ideas, 4 planning searches, top 2 acted on): 38 LLM calls (1 planner, 1 Research
+Director, 25 department, 1 CEO, 10 action) and 14 searches (4 broad, plus 2 per idea). Each run logs and reports the exact token counts. With prices set, it also shows an
+estimated cost, so you can check your budget against real numbers instead of guesses.
+
+**Untrusted web content.** Search results are wrapped in a `<sources>` block, and the agents are
+told to treat them as data only. Citations to source ids that were never provided are removed.
+Even if a web page tries to steer the agents, nothing external happens without your approval.
 
 ## Approve and execute actions
 
@@ -165,9 +233,17 @@ node src/cli.mjs memory
 
 | Flag | Env | Default |
 |---|---|---|
-| `--base-url` | `FREELLMAPI_BASE_URL` | `http://localhost:3001/v1` |
-| (env only) | `FREELLMAPI_API_KEY` | — |
-| `--model` | `AGENTS_MODEL` | `auto` (FreeLLMAPI's router picks) |
+| `--env` | `AGENTS_ENV` | `development` (`production` enforces paid providers + search) |
+| (env only) | `AGENTS_ALLOW_FREE_TIER=1` | off |
+| `--provider` | `AGENTS_LLM_PROVIDER` | `freellmapi` |
+| `--base-url` | `AGENTS_LLM_BASE_URL` (or `FREELLMAPI_BASE_URL`) | per provider |
+| (env only) | `AGENTS_LLM_API_KEY` (or the provider's key env) | — |
+| `--model` | `AGENTS_MODEL` | `auto` on FreeLLMAPI; required otherwise |
+| `--strong-model` | `AGENTS_STRONG_MODEL` | same as `--model` |
+| (env only) | `AGENTS_PRICE_INPUT_PER_MTOK` / `AGENTS_PRICE_OUTPUT_PER_MTOK` | — (no cost estimate) |
+| `--search` | `AGENTS_SEARCH` | `auto` |
+| (env only) | `TAVILY_API_KEY`, `AGENTS_SEARCH_URL`, `AGENTS_SEARCH_API_KEY` | — |
+| (env only) | `AGENTS_SEARCH_QUERIES` / `AGENTS_SEARCH_RESULTS` | `4` / `5` per query |
 | `--focus` | `AGENTS_FOCUS` | online income for a solo founder |
 | `-n, --opportunities` | `AGENTS_OPPORTUNITIES` | `5` |
 | `-c, --concurrency` | `AGENTS_CONCURRENCY` | `3` |
