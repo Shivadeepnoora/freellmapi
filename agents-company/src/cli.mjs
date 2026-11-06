@@ -212,7 +212,9 @@ switch (command) {
       const file = i.artifact ? `\n        file: ${i.artifact}` : i.videoPath ? `\n        watch: ${i.videoPath}\n        upload guide: ${i.uploadGuide}` : '';
       const url = i.resultUrl ? `\n        live: ${i.resultUrl}` : '';
       const err = i.error ? `\n        error: ${i.error}` : '';
-      console.log(`${i.id}  [${i.status}]  ${i.kind}${cost}  day ${i.day}  ${i.opportunity}\n        ${i.title}${details}${file}${url}${err}`);
+      const day = i.day != null ? `  day ${i.day}` : '';
+      const note = i.note ? `\n        note: ${i.note}` : '';
+      console.log(`${i.id}  [${i.status}]  ${i.kind}${cost}${day}  ${i.opportunity}\n        ${i.title}${details}${file}${url}${err}${note}`);
     }
     break;
   }
