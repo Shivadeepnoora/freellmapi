@@ -74,6 +74,33 @@ export class MockLLMClient {
             { day: 8, title: 'Email first update to subscribers', type: 'external', kind: 'send_email', artifact: 'newsletter.md' },
           ],
         };
+      case 'topic_researcher':
+        return {
+          topics: Array.from({ length: count }, (_, i) => ({
+            topic: ['Why the 50/30/20 rule fails students', 'The latte myth, by the numbers', 'Compound interest in 40 seconds', 'Why budgets fail in week three', 'The one bank fee most students miss', 'Emergency funds: how small is enough'][i % 6] + (i >= 6 ? ` ${i}` : ''),
+            angle: 'one specific, surprising point with a clear payoff',
+            why_it_works: 'specific and useful',
+            sources,
+          })).filter((t) => !avoid.includes(t.topic.toLowerCase())),
+        };
+      case 'scriptwriter':
+        return {
+          title: /Topic: (.+)/.exec(user)?.[1]?.slice(0, 70) ?? 'A useful money idea',
+          hook: 'Most students follow this rule and it quietly fails them.',
+          scenes: [
+            { narration: 'Most students follow this budgeting rule, and it quietly fails them within a month.', visual: 'a student at a desk with a notebook and coffee, warm morning light' },
+            { narration: 'The rule says spend half on needs, but rent alone often takes more than half for students.', visual: 'a small apartment door with a calendar on the wall' },
+            { narration: 'So the plan breaks on day one, and people blame themselves instead of the plan.', visual: 'a crumpled paper plan on a wooden table' },
+            { narration: 'A better start is simpler: track one week of spending, then pick a single number to cut.', visual: 'a phone showing a simple chart, close up, shallow depth of field' },
+            { narration: 'Small, honest numbers beat perfect plans. Follow for one practical money idea a day.', visual: 'sunrise over a quiet city street, hopeful mood' },
+          ],
+          description: 'Why a popular budgeting rule breaks for many students, and a simpler first step. See https://made-up.example/fake for more.',
+          tags: ['student budget', 'budgeting tips', 'personal finance'],
+          hashtags: ['#shorts', '#money'],
+          sources,
+        };
+      case 'video_reviewer':
+        return { approved: true, issues: [], fix_instructions: '' };
       case 'ceo':
         return { executive_summary: 'Prioritise the highest-scoring, most automatable streams.', priorities: ['Start with the top 2 ranked opportunities'], next_actions: ['Build MVP for #1 this week'] };
       default:

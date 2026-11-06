@@ -7,7 +7,8 @@ Anything that touches the outside world waits for your approval. It can
 run on a schedule and keeps a memory between runs. Research is based on **live web search**, and
 every claim cites its source. Published landing pages **collect real signups**, and each run
 **learns from those results**: winners are scaled, losers are dropped, and new ideas follow what
-converts.
+converts. A separate **[YouTube Shorts studio](#youtube-shorts-studio)** researches, writes,
+fact-checks and produces upload-ready faceless Shorts.
 
 It works with any OpenAI-compatible LLM API. FreeLLMAPI (free tiers) is the default for testing.
 For the real business, switch to paid providers and set `AGENTS_ENV=production`; see
@@ -360,6 +361,73 @@ it through the webhook, together with the approved text. Otherwise the company s
 `signups` now shows confirmed, pending and unsubscribed counts per page. `signups --export` adds a
 status column and never includes the secret link tokens.
 
+## YouTube Shorts studio
+
+A separate production line that runs a faceless YouTube Shorts channel: voiceover over AI visuals,
+with burned-in captions. You upload the finished videos yourself (for now).
+
+```
+Topic Researcher → Scriptwriter → Standards Reviewer → Producer (voice + images + ffmpeg) → your review → you upload
+        ▲                                                                                        │
+        └──────────── studio-results: views, retention, subscribers from YouTube Studio ◄─────────┘
+```
+
+1. **Topic Researcher** searches the web for your niche and picks specific, sourced topics. It
+   never repeats a topic and leans toward what performed (from recorded results).
+2. **Scriptwriter** writes a 30–55 second script: a hook, 4–7 scenes (narration plus an image
+   prompt each), title, description, tags and sources.
+3. **Standards Reviewer** rejects scripts with unsupported claims, misleading titles, advice framed
+   as certain, real people, brands or text in visuals, generic filler, or Community Guidelines
+   problems. A rejected script gets one rewrite; if it fails again it's skipped and a spare topic
+   is used.
+4. **Producer** generates a voiceover per scene (`/v1/audio/speech`) and a vertical image per scene
+   (`/v1/images/generations`). `ffmpeg` then builds a **1080×1920, 30 fps H.264/AAC** video with a
+   slow zoom on each image and big, outlined captions in the lower third, timed to the voice.
+5. **Package** in `data/workspace/studio/<run>/<video>/`:
+   - `short.mp4` and `cover.jpg`
+   - `metadata.md`: title, description, tags
+   - `UPLOAD.md`: a step-by-step checklist including the AI disclosure
+   - `script.json` and `captions.ass`
+6. **Review**: each video becomes a `publish_video` item in `approvals`, showing where to watch it.
+   The video file itself is never sent to any webhook.
+
+```bash
+export AGENTS_CHANNEL_NICHE="personal finance for students"
+export AGENTS_CHANNEL_NAME="Money Basics"
+export AGENTS_CHANNEL_LINK=https://you.github.io/launches/money-newsletter/   # your landing page / newsletter
+node src/cli.mjs studio --videos 2          # or --mock to try it offline (placeholder images and tones)
+node src/cli.mjs approvals                  # watch each video
+node src/cli.mjs studio-list
+node src/cli.mjs studio-results <slug> --views 1200 --viewed-pct 78 --subscribers 9 --url https://youtube.com/shorts/…
+```
+
+**Description safety.** Any URL the model wrote into the description is removed, together with
+its sentence. Only the verified source URLs from the research, your `AGENTS_CHANNEL_LINK`, and an
+honest AI note are added. Captions escape ASS control characters. ffmpeg runs without a shell.
+
+**Requirements.**
+- `ffmpeg` and `ffprobe` (`studio` checks for them).
+- A speech model and an image model enabled in FreeLLMAPI (Models page), or set
+  `AGENTS_MEDIA_BASE_URL`, `AGENTS_MEDIA_API_KEY`, `AGENTS_TTS_MODEL` and `AGENTS_IMAGE_MODEL` to a
+  paid OpenAI-compatible media API. Production mode requires that.
+
+**Cost per video:** about 3 LLM calls (more if a rewrite is needed), 5–7 voiceover clips, 5–7
+images and 2 searches, plus the 4 searches and 1 call per run for topics.
+
+### How a Shorts channel earns, honestly
+
+- **YouTube ad revenue only starts after the YouTube Partner Program:** 1,000 subscribers plus
+  4,000 public watch hours in a year, *or* 10 million public Shorts views in 90 days.
+- **Before that, the channel earns by sending viewers somewhere.** Every description links to
+  `AGENTS_CHANNEL_LINK`, ideally a landing page with signup capture. Your newsletter then turns
+  viewers into subscribers you own, and later into customers for an offer. Affiliate links and
+  sponsors come next.
+- **YouTube demonetizes "inauthentic", mass-produced content.** That's why the studio makes few,
+  specific, sourced videos, and why your review step matters. Don't raise `--videos` to churn
+  out volume; improve topics using `studio-results` instead.
+- **Disclose AI.** Set *Altered or synthetic content* to **Yes** whenever a visual looks like a
+  real person, place or event. The upload checklist reminds you.
+
 ## Automate it
 
 Built-in scheduler. Each cycle first sends out whatever you approved since the last cycle, then
@@ -422,6 +490,11 @@ node src/cli.mjs memory
 | (env only) | `AGENTS_POSTAL_ADDRESS` | — (required for newsletters) |
 | (env only) | `AGENTS_DOUBLE_OPT_IN=0` | on (confirmation email first) |
 | (env only) | `AGENTS_EMAIL_MAX_RECIPIENTS` | `1000` per newsletter |
+| `--niche` | `AGENTS_CHANNEL_NICHE` | — (required for `studio`) |
+| `--videos` | `AGENTS_STUDIO_VIDEOS` | `2` per studio run (1–10) |
+| (env only) | `AGENTS_CHANNEL_NAME` / `AGENTS_CHANNEL_LINK` / `AGENTS_CHANNEL_CTA` | — / — / `Free newsletter` |
+| (env only) | `AGENTS_MEDIA_BASE_URL` / `AGENTS_MEDIA_API_KEY` | FreeLLMAPI / `FREELLMAPI_API_KEY` |
+| (env only) | `AGENTS_TTS_MODEL` / `AGENTS_TTS_VOICE` / `AGENTS_IMAGE_MODEL` | `auto` / `alloy` / `auto` |
 
 ## Extend it
 

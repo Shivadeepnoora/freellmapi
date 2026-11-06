@@ -87,6 +87,18 @@ export function loadConfig(overrides = {}, env = process.env) {
     doubleOptIn: env.AGENTS_DOUBLE_OPT_IN !== '0',
     emailMaxRecipients: Number(env.AGENTS_EMAIL_MAX_RECIPIENTS ?? 1000),
 
+    // YouTube Shorts studio
+    channelNiche: pick('channelNiche', 'AGENTS_CHANNEL_NICHE', ''),
+    channelName: env.AGENTS_CHANNEL_NAME ?? '',
+    channelLink: env.AGENTS_CHANNEL_LINK ?? '',
+    channelCta: env.AGENTS_CHANNEL_CTA ?? 'Free newsletter',
+    studioVideos: Number(pick('studioVideos', 'AGENTS_STUDIO_VIDEOS', 2)),
+    mediaBaseUrl: (env.AGENTS_MEDIA_BASE_URL ?? freellmapiBase).replace(/\/$/, ''),
+    mediaApiKey: env.AGENTS_MEDIA_API_KEY ?? env.FREELLMAPI_API_KEY ?? '',
+    ttsModel: env.AGENTS_TTS_MODEL ?? 'auto',
+    ttsVoice: env.AGENTS_TTS_VOICE ?? 'alloy',
+    imageModel: env.AGENTS_IMAGE_MODEL ?? 'auto',
+
     minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
     targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
     intervalMs: parseInterval(pick('interval', 'AGENTS_INTERVAL', '24h')),
@@ -148,6 +160,26 @@ export function validateConfig(config) {
   } else if (preset?.freeTier || search?.freeTier) {
     warnings.push('Running on FreeLLMAPI free tiers: fine for testing, but switch to paid providers (and set AGENTS_ENV=production) before relying on this for the business.');
   }
+  return { errors, warnings };
+}
+
+// Extra checks for the YouTube studio (on top of validateConfig).
+export function validateStudioConfig(config) {
+  const errors = [];
+  const warnings = [];
+  if (!config.channelNiche) errors.push('Set the channel niche: AGENTS_CHANNEL_NICHE or --niche (e.g. "personal finance for students").');
+  if (!Number.isInteger(config.studioVideos) || config.studioVideos < 1 || config.studioVideos > 10) errors.push('AGENTS_STUDIO_VIDEOS / --videos must be between 1 and 10.');
+  if (config.mock) return { errors, warnings };
+  const freeMedia = config.mediaBaseUrl.replace(/\/$/, '') === (process.env.FREELLMAPI_BASE_URL ?? LLM_PROVIDERS.freellmapi.baseUrl).replace(/\/$/, '');
+  if (freeMedia) {
+    if (config.environment === 'production' && !config.allowFreeTier) {
+      errors.push('AGENTS_ENV=production but voiceover and images go through FreeLLMAPI free tiers. Set AGENTS_MEDIA_BASE_URL (and AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_IMAGE_MODEL) to a paid OpenAI-compatible media API, or AGENTS_ALLOW_FREE_TIER=1.');
+    } else {
+      warnings.push('Voiceover and images use FreeLLMAPI free tiers: fine for testing; check each provider\'s terms before publishing commercially. FreeLLMAPI needs speech and image models enabled on its Models page.');
+    }
+    if (!config.mediaApiKey) warnings.push('FREELLMAPI_API_KEY is not set, so media requests will be refused.');
+  }
+  if (!config.channelLink) warnings.push('AGENTS_CHANNEL_LINK is not set: descriptions will not point viewers to your newsletter or offer, which is how a new channel earns before monetization.');
   return { errors, warnings };
 }
 

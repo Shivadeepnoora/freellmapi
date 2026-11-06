@@ -11,10 +11,17 @@
 // agents-company results          live views, signups and verdicts for every launched page
 // agents-company signups          signup counts; --export [page] prints CSV, --delete <email> erases
 // agents-company email-test <to>  send one test email through Resend to check the setup
+// agents-company studio           make YouTube Shorts: research, script, review, voice, visuals, video
+// agents-company studio-list      videos made, with recorded results
+// agents-company studio-results <slug> --views N …   record a video's YouTube Studio numbers
 import { parseArgs } from 'node:util';
+import { Studio } from './studio/studio.mjs';
+import { StudioMemory } from './studio/memory.mjs';
+import { MockMediaClient, mediaFromConfig } from './studio/media.mjs';
+import { hasFfmpeg } from './studio/ffmpeg.mjs';
 import { mailerFromConfig } from './email/resend.mjs';
 import { welcomeEmail } from './email/templates.mjs';
-import { loadConfig, validateConfig, signupOrigins } from './config.mjs';
+import { loadConfig, validateConfig, validateStudioConfig, signupOrigins } from './config.mjs';
 import { MetricsStore, metricsFromConfig } from './feedback/metrics.mjs';
 import { collectResults } from './feedback/traction.mjs';
 import { LLMClient } from './llm.mjs';
@@ -28,7 +35,7 @@ import { buildExecutors, siteFromConfig } from './executors/index.mjs';
 import { publisherFromConfig } from './executors/github-pages.mjs';
 import { createWebhookServer } from './executors/webhook-server.mjs';
 
-const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test'];
+const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test', 'studio', 'studio-list', 'studio-results'];
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -38,6 +45,15 @@ const { positionals, values } = parseArgs({
     'signup-url': { type: 'string' },
     export: { type: 'boolean' },
     delete: { type: 'string' },
+    niche: { type: 'string' },
+    videos: { type: 'string' },
+    views: { type: 'string' },
+    likes: { type: 'string' },
+    comments: { type: 'string' },
+    subscribers: { type: 'string' },
+    'viewed-pct': { type: 'string' },
+    'avg-view-seconds': { type: 'string' },
+    url: { type: 'string' },
     focus: { type: 'string' },
     opportunities: { type: 'string', short: 'n' },
     concurrency: { type: 'string', short: 'c' },
@@ -72,6 +88,9 @@ if (values.help || !COMMANDS.includes(command)) {
   results:    live views, signups, conversion and verdict per launched page
   signups:    counts per page; [--export] [page] prints CSV with emails; [--delete email] erases a person
   email-test: <to-address>  send one test email through Resend
+  studio:     [--niche "..."] [--videos 2] [--mock]   make YouTube Shorts for review
+  studio-list / studio-results <slug> [--views N] [--likes N] [--comments N] [--subscribers N]
+              [--viewed-pct N] [--avg-view-seconds N] [--url https://youtube.com/shorts/…]
   common:     [--data-dir DIR]
 Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL, AGENTS_STRONG_MODEL, AGENTS_ENV,
      FREELLMAPI_BASE_URL, FREELLMAPI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, AGENTS_ALLOW_FREE_TIER=1,
@@ -82,7 +101,8 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_SIGNUP_URL, AGENTS_SIGNUP_ALLOWED_ORIGINS, AGENTS_BUSINESS_NAME, AGENTS_CONTACT_EMAIL,
      AGENTS_TRUST_PROXY=1, AGENTS_METRICS_SOURCE=local, AGENTS_MIN_VIEWS, AGENTS_TARGET_CONVERSION,
      RESEND_API_KEY, AGENTS_EMAIL_FROM, AGENTS_EMAIL_REPLY_TO, AGENTS_POSTAL_ADDRESS, AGENTS_DOUBLE_OPT_IN=0,
-     AGENTS_EMAIL_MAX_RECIPIENTS`);
+     AGENTS_EMAIL_MAX_RECIPIENTS, AGENTS_CHANNEL_NICHE, AGENTS_CHANNEL_NAME, AGENTS_CHANNEL_LINK, AGENTS_CHANNEL_CTA,
+     AGENTS_STUDIO_VIDEOS, AGENTS_MEDIA_BASE_URL, AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_TTS_VOICE, AGENTS_IMAGE_MODEL`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -106,6 +126,8 @@ const config = loadConfig({
   githubPagesBranch: values['pages-branch'],
   port: values.port,
   signupUrl: values['signup-url'],
+  channelNiche: values.niche,
+  studioVideos: values.videos,
 });
 const memory = new CompanyMemory(config.dataDir);
 const approvals = new ApprovalQueue(config.dataDir);
@@ -130,7 +152,7 @@ switch (command) {
     for (const i of items) {
       const cost = i.costUsd ? ` ($${i.costUsd})` : '';
       const details = i.details ? ` — ${i.details}` : '';
-      const file = i.artifact ? `\n        file: ${i.artifact}` : '';
+      const file = i.artifact ? `\n        file: ${i.artifact}` : i.videoPath ? `\n        watch: ${i.videoPath}\n        upload guide: ${i.uploadGuide}` : '';
       const url = i.resultUrl ? `\n        live: ${i.resultUrl}` : '';
       const err = i.error ? `\n        error: ${i.error}` : '';
       console.log(`${i.id}  [${i.status}]  ${i.kind}${cost}  day ${i.day}  ${i.opportunity}\n        ${i.title}${details}${file}${url}${err}`);
@@ -213,6 +235,64 @@ switch (command) {
       for (const [page, s] of pages) {
         console.log(`${page.padEnd(40)} ${String(s.views).padStart(6)} views ${String(s.signups).padStart(5)} signups  (${s.confirmed} confirmed, ${s.pending} pending, ${s.unsubscribed} unsubscribed)`);
       }
+    }
+    break;
+  }
+  case 'studio': {
+    const base = validateConfig(config);
+    const studioCheck = validateStudioConfig(config);
+    // Studio doesn't publish pages, so page/signup/email warnings aren't relevant here.
+    const errors = [...base.errors.filter((e) => !/SIGNUP|POSTAL|CONTACT_EMAIL|EMAIL_FROM/.test(e)), ...studioCheck.errors];
+    [...base.warnings.filter((w) => !/SIGNUP|RESEND|POSTAL|CONTACT/.test(w)), ...studioCheck.warnings].forEach((w) => console.warn(`Warning: ${w}`));
+    if (!(await hasFfmpeg())) errors.push('ffmpeg and ffprobe are required to build videos (e.g. apt-get install ffmpeg, or brew install ffmpeg).');
+    if (errors.length) {
+      errors.forEach((e) => console.error(`Error: ${e}`));
+      process.exit(1);
+    }
+    const studio = new Studio({
+      llm: config.mock ? new MockLLMClient() : new LLMClient(config),
+      media: config.mock ? new MockMediaClient() : mediaFromConfig(config),
+      search: config.mock ? (config.searchProvider === 'off' ? null : new MockSearchClient()) : searchFromConfig(config),
+      memory: new StudioMemory(config.dataDir),
+      approvals,
+      config,
+      log,
+    });
+    try {
+      const r = await studio.run();
+      log(`Studio done: ${r.videos.length} video(s) ready, ${r.skipped.length} skipped. Report: ${r.dir}/report.md`);
+      for (const v of r.videos) log(`  ${v.approval ?? ''} ${v.title} (${v.duration}s) → ${v.videoPath}`);
+      if (r.videos.length) log('Watch each video, then follow its UPLOAD.md. Record results later with `studio-results <slug> --views N`.');
+    } catch (err) {
+      console.error(`Studio failed: ${err.message}`);
+      process.exit(1);
+    }
+    break;
+  }
+  case 'studio-list': {
+    const memoryS = new StudioMemory(config.dataDir);
+    if (!memoryS.state.videos.length) console.log('No videos yet. Run `studio` first.');
+    for (const v of memoryS.state.videos) {
+      const r = v.results;
+      const stats = r ? `${r.views ?? '?'} views${r.viewedPct != null ? `, ${r.viewedPct}% viewed` : ''}${r.subscribers != null ? `, +${r.subscribers} subs` : ''}` : 'no results recorded';
+      console.log(`${v.slug}\n    ${v.title} · ${v.duration}s · ${stats}${v.youtubeUrl ? ` · ${v.youtubeUrl}` : ''}`);
+    }
+    break;
+  }
+  case 'studio-results': {
+    if (!ids[0]) {
+      console.error('Usage: agents-company studio-results <slug> --views N [--likes N] [--comments N] [--subscribers N] [--viewed-pct N] [--avg-view-seconds N] [--url URL]');
+      process.exit(1);
+    }
+    try {
+      const v = new StudioMemory(config.dataDir).recordResults(ids[0], {
+        views: values.views, likes: values.likes, comments: values.comments, subscribers: values.subscribers,
+        viewedPct: values['viewed-pct'], avgViewSeconds: values['avg-view-seconds'], youtubeUrl: values.url,
+      });
+      console.log(`Recorded results for "${v.title}". The next studio run will take them into account.`);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
     }
     break;
   }
