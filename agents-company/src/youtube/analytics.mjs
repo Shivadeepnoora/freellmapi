@@ -84,7 +84,7 @@ export class YouTubeAnalytics {
 // Updates studio memory with the latest numbers for every uploaded Short.
 // Returns {updated, waiting, uploaded} for logging.
 export async function syncStudioStats({ analytics, memory, now = new Date(), log = () => {} }) {
-  const uploaded = memory.state.videos.filter((v) => v.videoId && VIDEO_ID_RE.test(v.videoId));
+  const uploaded = memory.reload().state.videos.filter((v) => v.videoId && VIDEO_ID_RE.test(v.videoId));
   if (!uploaded.length) return { updated: [], waiting: [], uploaded: 0 };
   const day = (d) => new Date(d).toISOString().slice(0, 10);
   const startDate = day(Math.min(...uploaded.map((v) => new Date(v.uploadedAt ?? v.createdAt ?? now).getTime())));

@@ -22,7 +22,9 @@ import { hasFfmpeg } from './studio/ffmpeg.mjs';
 import { startAuth, finishAuth, waitForRedirect } from './youtube/oauth.mjs';
 import { mailerFromConfig } from './email/resend.mjs';
 import { welcomeEmail } from './email/templates.mjs';
-import { loadConfig, validateConfig, validateStudioConfig, validateYouTubeConfig, youtubeAnalyticsGranted, signupOrigins } from './config.mjs';
+import { loadConfig, validateConfig, validateStudioConfig, validateYouTubeConfig, youtubeAnalyticsGranted, signupOrigins, daemonPlan } from './config.mjs';
+import { Scheduler, isDue } from './scheduler.mjs';
+import { createStudioJob } from './studio/schedule.mjs';
 import { analyticsFromConfig, syncStudioStats } from './youtube/analytics.mjs';
 import { MetricsStore, metricsFromConfig } from './feedback/metrics.mjs';
 import { collectResults } from './feedback/traction.mjs';
@@ -58,6 +60,9 @@ const { positionals, values } = parseArgs({
     url: { type: 'string' },
     redirect: { type: 'string' },
     privacy: { type: 'string' },
+    jobs: { type: 'string' },
+    'studio-every': { type: 'string' },
+    check: { type: 'string' },
     focus: { type: 'string' },
     opportunities: { type: 'string', short: 'n' },
     concurrency: { type: 'string', short: 'c' },
@@ -82,6 +87,7 @@ const { positionals, values } = parseArgs({
 const command = positionals[0] ?? 'run';
 if (values.help || !COMMANDS.includes(command)) {
   console.log(`Usage: agents-company <${COMMANDS.join('|')}> [options]
+  daemon:     [--jobs company,studio] [--studio-every 24h] [--check 10m]   runs whatever is due, forever
   run/daemon: [--mock] [--no-act] [--execute-top 2] [--focus "..."] [-n 5] [-c 3] [--interval 24h]
               [--provider freellmapi|openai|openrouter|custom] [--model M] [--strong-model M] [--base-url URL]
               [--search auto|freellmapi|tavily|custom|off] [--env development|production]
@@ -111,7 +117,8 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_EMAIL_MAX_RECIPIENTS, AGENTS_CHANNEL_NICHE, AGENTS_CHANNEL_NAME, AGENTS_CHANNEL_LINK, AGENTS_CHANNEL_CTA,
      AGENTS_STUDIO_VIDEOS, AGENTS_MEDIA_BASE_URL, AGENTS_MEDIA_API_KEY, AGENTS_TTS_MODEL, AGENTS_TTS_VOICE, AGENTS_IMAGE_MODEL,
      YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN, AGENTS_YOUTUBE_PRIVACY, AGENTS_YOUTUBE_SYNTHETIC=0,
-     AGENTS_YOUTUBE_AUTH_PORT, AGENTS_YOUTUBE_ANALYTICS=0`);
+     AGENTS_YOUTUBE_AUTH_PORT, AGENTS_YOUTUBE_ANALYTICS=0, AGENTS_DAEMON_JOBS, AGENTS_DAEMON_CHECK, AGENTS_STUDIO_EVERY,
+     AGENTS_STUDIO_MAX_PENDING`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -138,6 +145,9 @@ const config = loadConfig({
   channelNiche: values.niche,
   studioVideos: values.videos,
   youtubePrivacy: values.privacy,
+  jobs: values.jobs,
+  studioEvery: values['studio-every'],
+  check: values.check,
 });
 const memory = new CompanyMemory(config.dataDir);
 const approvals = new ApprovalQueue(config.dataDir);
@@ -151,6 +161,30 @@ try {
   process.exit(1);
 }
 const dispatch = () => approvals.dispatch({ webhookUrl: config.webhookUrl, webhookSecret: config.webhookSecret, executors, log });
+
+// Everything the studio needs before it can make videos. The studio doesn't
+// publish pages, so page/signup/email checks are left out.
+async function studioChecks() {
+  const base = validateConfig(config);
+  const studioCheck = validateStudioConfig(config);
+  const errors = [...base.errors.filter((e) => !/SIGNUP|POSTAL|CONTACT_EMAIL|EMAIL_FROM/.test(e)), ...studioCheck.errors];
+  const warnings = [...base.warnings.filter((w) => !/SIGNUP|RESEND|POSTAL|CONTACT/.test(w)), ...studioCheck.warnings];
+  if (!(await hasFfmpeg())) errors.push('ffmpeg and ffprobe are required to build videos (e.g. apt-get install ffmpeg, or brew install ffmpeg).');
+  return { errors, warnings };
+}
+
+function makeStudio() {
+  return new Studio({
+    llm: config.mock ? new MockLLMClient() : new LLMClient(config),
+    media: config.mock ? new MockMediaClient() : mediaFromConfig(config),
+    search: config.mock ? (config.searchProvider === 'off' ? null : new MockSearchClient()) : searchFromConfig(config),
+    memory: new StudioMemory(config.dataDir),
+    approvals,
+    config,
+    syncStats: config.mock ? null : () => syncYouTube(),
+    log,
+  });
+}
 
 // Pulls YouTube Analytics stats into studio memory. Quietly does nothing when
 // YouTube or analytics isn't set up, unless `required` (studio-sync).
@@ -262,26 +296,13 @@ switch (command) {
     break;
   }
   case 'studio': {
-    const base = validateConfig(config);
-    const studioCheck = validateStudioConfig(config);
-    // Studio doesn't publish pages, so page/signup/email warnings aren't relevant here.
-    const errors = [...base.errors.filter((e) => !/SIGNUP|POSTAL|CONTACT_EMAIL|EMAIL_FROM/.test(e)), ...studioCheck.errors];
-    [...base.warnings.filter((w) => !/SIGNUP|RESEND|POSTAL|CONTACT/.test(w)), ...studioCheck.warnings].forEach((w) => console.warn(`Warning: ${w}`));
-    if (!(await hasFfmpeg())) errors.push('ffmpeg and ffprobe are required to build videos (e.g. apt-get install ffmpeg, or brew install ffmpeg).');
+    const { errors, warnings } = await studioChecks();
+    warnings.forEach((w) => console.warn(`Warning: ${w}`));
     if (errors.length) {
       errors.forEach((e) => console.error(`Error: ${e}`));
       process.exit(1);
     }
-    const studio = new Studio({
-      llm: config.mock ? new MockLLMClient() : new LLMClient(config),
-      media: config.mock ? new MockMediaClient() : mediaFromConfig(config),
-      search: config.mock ? (config.searchProvider === 'off' ? null : new MockSearchClient()) : searchFromConfig(config),
-      memory: new StudioMemory(config.dataDir),
-      approvals,
-      config,
-      syncStats: config.mock ? null : () => syncYouTube(),
-      log,
-    });
+    const studio = makeStudio();
     try {
       const r = await studio.run();
       log(`Studio done: ${r.videos.length} video(s) ready, ${r.skipped.length} skipped. Report: ${r.dir}/report.md`);
@@ -399,12 +420,25 @@ switch (command) {
 }
 
 async function runOrDaemon() {
-  const { errors, warnings } = validateConfig(config);
-  warnings.forEach((w) => console.warn(`Warning: ${w}`));
-  if (errors.length) {
-    errors.forEach((e) => console.error(`Error: ${e}`));
-    process.exit(1);
+  const plan = command === 'daemon' ? daemonPlan(config) : { jobs: ['company'], explicit: true, errors: [] };
+  const fail = (errs) => { errs.forEach((e) => console.error(`Error: ${e}`)); process.exit(1); };
+  if (plan.errors.length) fail(plan.errors);
+  if (plan.jobs.includes('company')) {
+    const { errors, warnings } = validateConfig(config);
+    warnings.forEach((w) => console.warn(`Warning: ${w}`));
+    if (errors.length) fail(errors);
   }
+  if (plan.jobs.includes('studio')) {
+    const { errors, warnings } = await studioChecks();
+    warnings.forEach((w) => console.warn(`Warning: ${w}`));
+    if (errors.length && plan.explicit) fail(errors);
+    if (errors.length) {
+      // Auto-enabled because a niche is set: keep the business running, just without the studio.
+      errors.forEach((e) => console.warn(`Warning: studio job disabled: ${e}`));
+      plan.jobs = plan.jobs.filter((j) => j !== 'studio');
+    }
+  }
+  if (!plan.jobs.length) fail(['No daemon jobs left to run']);
   const llm = config.mock ? new MockLLMClient() : new LLMClient(config);
   let search = null;
   if (config.mock) search = config.searchProvider === 'off' ? null : new MockSearchClient();
@@ -434,24 +468,39 @@ async function runOrDaemon() {
     return;
   }
 
-  let running = false;
-  const tick = async () => {
-    if (running) return log('Previous cycle still running; skipping this tick');
-    running = true;
-    try {
-      await dispatch();
-      // YouTube stats never block the business cycle.
-      if (!config.mock) await syncYouTube().catch((err) => log(`[YouTube Analytics] skipped: ${err.message}`));
-      await cycle();
-    } catch (err) {
-      log(`Cycle failed: ${err.message}`);
-    } finally {
-      running = false;
-    }
-  };
-  log(`Daemon started; running every ${config.intervalMs / 1000}s`);
-  await tick();
-  const timer = setInterval(tick, config.intervalMs);
+  // Daemon: every check, run whatever is due. Approved actions (uploads,
+  // pages, newsletters) go out on every check; stats sync hourly; the business
+  // cycle and the studio each keep their own schedule, saved across restarts.
+  const RETRY_MS = 60 * 60_000;
+  let lastSync = 0;
+  let companyFailedAt = 0;
+  const jobs = [
+    { name: 'approved actions', due: () => approvals.list('approved').length > 0, run: () => dispatch() },
+    { name: 'youtube-analytics', due: () => !config.mock && Date.now() - lastSync >= RETRY_MS, run: async () => { lastSync = Date.now(); await syncYouTube().catch((err) => log(`[YouTube Analytics] skipped: ${err.message}`)); } },
+  ];
+  if (plan.jobs.includes('company')) {
+    jobs.push({
+      name: 'company',
+      due: () => (companyFailedAt
+        ? isDue(new Date(companyFailedAt), Math.min(RETRY_MS, config.intervalMs))
+        : isDue(memory.state.runs.at(-1)?.at, config.intervalMs)),
+      run: async () => {
+        try { await cycle(); companyFailedAt = 0; } catch (err) { companyFailedAt = Date.now(); throw err; }
+      },
+    });
+  }
+  if (plan.jobs.includes('studio')) {
+    jobs.push(createStudioJob({ makeStudio, memory: new StudioMemory(config.dataDir), approvals, intervalMs: plan.studioIntervalMs, maxPending: config.studioMaxPending, log }));
+  }
+  const scheduler = new Scheduler({ jobs, log });
+  const every = (ms) => (ms % 36e5 === 0 ? `${ms / 36e5}h` : ms % 6e4 === 0 ? `${ms / 6e4}m` : `${ms / 1000}s`);
+  log(`Daemon started, checking every ${every(config.checkMs)}. Jobs:`);
+  log('  approved actions: uploads, pages and newsletters go out within one check of your approval');
+  if (plan.jobs.includes('company')) log(`  company: research → decide → act, every ${every(config.intervalMs)}`);
+  if (plan.jobs.includes('studio')) log(`  studio: ${config.studioVideos} Short(s) every ${every(plan.studioIntervalMs)} for "${config.channelNiche}", paused while ${config.studioMaxPending}+ wait for review`);
+  if (!config.mock && analyticsFromConfig(config)) log('  youtube-analytics: stats sync hourly');
+  await scheduler.tick();
+  const timer = setInterval(() => scheduler.tick(), config.checkMs);
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
       clearInterval(timer);

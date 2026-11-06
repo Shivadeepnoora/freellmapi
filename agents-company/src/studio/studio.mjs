@@ -35,7 +35,8 @@ export class Studio {
       try { await this.syncStats(); } catch (err) { this.log(`[YouTube Analytics] skipped: ${err.message}`); }
     }
 
-    // 1. Research the niche
+    // 1. Research the niche (from the latest memory: the sync or an upload may have just changed it)
+    this.memory.reload();
     if (this.search) {
       const year = new Date().getFullYear();
       const queries = [`${niche} surprising facts`, `${niche} common mistakes`, `${niche} new research ${year}`, `${niche} questions people ask`];

@@ -114,6 +114,12 @@ export function loadConfig(overrides = {}, env = process.env) {
     minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
     targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
     intervalMs: parseInterval(pick('interval', 'AGENTS_INTERVAL', '24h')),
+
+    // Daemon: which jobs run, how often it checks for due work, and the studio's own schedule.
+    daemonJobs: splitList(pick('jobs', 'AGENTS_DAEMON_JOBS', '')),
+    checkMs: parseInterval(pick('check', 'AGENTS_DAEMON_CHECK', '10m')),
+    studioEvery: String(pick('studioEvery', 'AGENTS_STUDIO_EVERY', '24h')),
+    studioMaxPending: Number(env.AGENTS_STUDIO_MAX_PENDING ?? 4),
   };
 }
 
@@ -213,6 +219,32 @@ export function youtubeAnalyticsGranted(config) {
   const f = join(config.dataDir, 'youtube-token.json');
   if (!existsSync(f)) return false;
   try { return String(JSON.parse(readFileSync(f, 'utf8')).scope ?? '').includes('yt-analytics.readonly'); } catch { return false; }
+}
+
+// Which daemon jobs run. Explicit AGENTS_DAEMON_JOBS / --jobs wins; otherwise
+// the business cycle always runs and the studio joins when a niche is set
+// (AGENTS_STUDIO_EVERY=off turns it off).
+export const DAEMON_JOBS = ['company', 'studio'];
+
+export function daemonPlan(config) {
+  const errors = [];
+  const explicit = config.daemonJobs.length > 0;
+  const jobs = explicit ? config.daemonJobs : ['company', ...(config.channelNiche && config.studioEvery !== 'off' ? ['studio'] : [])];
+  const unknown = jobs.filter((j) => !DAEMON_JOBS.includes(j));
+  if (unknown.length) errors.push(`Unknown daemon job(s): ${unknown.join(', ')} (use: ${DAEMON_JOBS.join(', ')})`);
+  let studioIntervalMs = null;
+  if (jobs.includes('studio')) {
+    if (config.studioEvery === 'off') errors.push('The studio job is requested but AGENTS_STUDIO_EVERY=off');
+    else {
+      try {
+        studioIntervalMs = parseInterval(config.studioEvery);
+        if (studioIntervalMs < 60 * 60_000) errors.push('AGENTS_STUDIO_EVERY must be at least 1h; making Shorts more often than that is volume, not quality');
+      } catch (err) { errors.push(err.message); }
+    }
+    if (!Number.isInteger(config.studioMaxPending) || config.studioMaxPending < 1) errors.push('AGENTS_STUDIO_MAX_PENDING must be a whole number of at least 1');
+  }
+  if (config.checkMs < 60_000) errors.push('AGENTS_DAEMON_CHECK must be at least 1m');
+  return { jobs: [...new Set(jobs)], explicit, studioIntervalMs, errors };
 }
 
 // Origins allowed to post signups: the explicit list, else the GitHub Pages

@@ -519,14 +519,44 @@ node src/cli.mjs studio-list
 
 ## Automate it
 
-Built-in scheduler. Each cycle first sends out whatever you approved since the last cycle, then
-runs research and acts. Overlapping cycles are skipped:
+One long-running process does everything on its own schedule:
 
 ```bash
-node src/cli.mjs daemon --interval 24h
+node src/cli.mjs daemon
 ```
 
-Or with cron, every day at 07:00:
+Every check (`--check`, default **10m**), it runs whatever is due, one job at a time:
+
+| Job | When | What |
+|---|---|---|
+| **approved actions** | whenever something is approved | uploads Shorts, publishes pages, sends newsletters, within one check of your approval |
+| **youtube-analytics** | hourly, if connected | pulls views, retention and subscribers for uploaded Shorts |
+| **company** | every `--interval` / `AGENTS_INTERVAL` (24h) | research → decide → act for income ideas |
+| **studio** | every `--studio-every` / `AGENTS_STUDIO_EVERY` (24h) | makes `AGENTS_STUDIO_VIDEOS` (2) new Shorts for review |
+
+- **Which jobs run.** The company job always runs. The studio joins automatically once
+  `AGENTS_CHANNEL_NICHE` is set (`AGENTS_STUDIO_EVERY=off` turns it off). Use `--jobs studio` for
+  a YouTube-only company, or `--jobs company,studio` to require both: then a setup problem stops
+  the daemon instead of just disabling that job.
+- **No pile-up of unwatched videos.** While `AGENTS_STUDIO_MAX_PENDING` (4) or more Shorts are
+  waiting for your review, the studio pauses. That way it doesn't spend credits on videos nobody
+  has watched. It resumes at the next check after you review.
+- **Restart-safe.** The last studio run and the last business cycle are saved, so restarting the
+  daemon doesn't make an extra batch.
+- **Failures.** A failed job retries an hour later, not every check and not a day later. One job
+  failing never stops the others.
+- **At least 1h between studio runs.** More often than that is volume, not quality, and YouTube
+  demonetizes that.
+
+Keep it running with a process manager, so it restarts after crashes and reboots:
+
+```bash
+npm install -g pm2
+pm2 start src/cli.mjs --name agents-company -- daemon
+pm2 save && pm2 startup
+```
+
+Or with cron, every day at 07:00 (one-off runs instead of the daemon):
 
 ```
 0 7 * * * cd /path/to/freellmapi/agents-company && FREELLMAPI_API_KEY=... node src/cli.mjs run >> data/cron.log 2>&1
@@ -590,6 +620,10 @@ node src/cli.mjs memory
 | (env only) | `AGENTS_YOUTUBE_SYNTHETIC=0` | disclosure on |
 | (env only) | `AGENTS_YOUTUBE_AUTH_PORT` | `8976` (loopback port for sign-in) |
 | (env only) | `AGENTS_YOUTUBE_ANALYTICS=0` | on (pull stats from YouTube Analytics) |
+| `--jobs` | `AGENTS_DAEMON_JOBS` | company, plus studio when a niche is set |
+| `--check` | `AGENTS_DAEMON_CHECK` | `10m` (min `1m`) |
+| `--studio-every` | `AGENTS_STUDIO_EVERY` | `24h` (min `1h`; `off` disables) |
+| (env only) | `AGENTS_STUDIO_MAX_PENDING` | `4` Shorts waiting for review pauses the studio |
 
 ## Extend it
 

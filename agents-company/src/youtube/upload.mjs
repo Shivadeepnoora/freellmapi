@@ -116,7 +116,7 @@ export function youtubeExecutor({ uploader, memory, dataDir, privacyStatus = 'pu
     async execute(action) {
       const file = resolve(action.videoPath);
       if (!file.startsWith(studioRoot) || basename(file) !== 'short.mp4') throw new Error(`refusing to upload ${action.videoPath}: not a studio-made short.mp4`);
-      const already = action.videoId ?? memory?.find(action.slug)?.videoId;
+      const already = action.videoId ?? memory?.reload().find(action.slug)?.videoId;
       if (already) return { status: 'executed', executor: 'youtube', videoId: already, url: shortsUrl(already), note: 'already uploaded' };
       if (!action.upload?.title) throw new Error('this item has no upload metadata; re-run the studio to produce it again');
       try {

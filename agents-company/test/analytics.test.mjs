@@ -72,6 +72,7 @@ test('syncStudioStats stores analytics as results, keeps fresh uploads waiting, 
   memory.linkUpload('old', { videoId: 'oldVIDEO001', youtubeUrl: 'https://youtube.com/shorts/oldVIDEO001', privacy: 'public' });
   memory.linkUpload('fresh', { videoId: 'newVIDEO002', youtubeUrl: 'https://youtube.com/shorts/newVIDEO002', privacy: 'public' });
   memory.find('old').uploadedAt = '2026-10-20T10:00:00.000Z';
+  memory.save(); // memory re-reads the file before every change, so unsaved edits don't survive
   memory.recordResults('old', { views: 10 }); // hand-typed earlier
 
   let asked;
