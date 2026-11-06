@@ -37,14 +37,15 @@ No dependencies beyond Node ≥ 20.
          each returns a structured JSON report with a 1–10 score
                                 │
                     CEO picks the top ideas (--execute-top)
-   ┌──────────────┬─────────────┬──────────────┬───────────────┬───────────────┐
-   │   Product    │   Content   │   Sales &    │  Automation   │  Operations   │
-   │   Builder    │   Writer    │   Outreach   │   Builder     │   Manager     │
-   └──────┬───────┴──────┬──────┴──────┬───────┴───────┬───────┴───────┬───────┘
-   landing-page.html  content.md   outreach.md   automation.mjs    plan.json
-          └────────── written to the workspace ──────────┘             │
+   ┌────────────┬────────────┬────────────┬────────────┬────────────┬────────────┐
+   │  Product   │  Content   │  Sales &   │ Automation │   Email    │ Operations │
+   │  Builder   │  Writer    │  Outreach  │  Builder   │  Marketer  │  Manager   │
+   └─────┬──────┴─────┬──────┴─────┬──────┴─────┬──────┴─────┬──────┴─────┬──────┘
+   landing-page   content.md  outreach.md automation  newsletter.md   plan.json
+      .html                                  .mjs
+         └──────────── written to the workspace ────────────┘           │
                                                    external tasks → approval queue
-                                                   you approve → webhook executes
+                                         you approve → publish page / email subscribers
 ```
 
 One cycle:
@@ -297,6 +298,68 @@ approved launch content is what makes the loop turn.
 `check` warns, and in production refuses to run, when pages would be published without signup
 capture or without the business name and contact email the privacy notice needs.
 
+## Emailing subscribers (Resend)
+
+Subscribers hear from you through [Resend](https://resend.com).
+
+| Email | When | Written by | Needs your approval |
+|---|---|---|---|
+| **Confirmation** | right after signup (double opt-in) | fixed template | no (it's the response to their own request) |
+| **Welcome** | after they click *Confirm* | fixed template | no |
+| **Newsletter** | when you approve a `send_email` action | the Email Marketer agent (`newsletter.md`) | **yes**, always |
+
+No AI-written text is ever emailed automatically. The confirmation and welcome emails are fixed
+templates. Newsletters are drafts in the approval queue, and you can read them before approving.
+
+### Setup
+
+1. Create a Resend account, add your sending domain, and add the DNS records Resend shows you
+   (SPF, DKIM, and DMARC is recommended). Wait until the domain shows *Verified*.
+2. Create an API key with *Sending access*.
+3. Set these where `webhook-server` runs, and also where the company runs if it's a different
+   machine with local subscribers:
+
+```bash
+export RESEND_API_KEY=re_...
+export AGENTS_EMAIL_FROM="Your Business <hello@yourdomain.com>"   # on the verified domain
+export AGENTS_EMAIL_REPLY_TO=you@yourdomain.com                     # optional; replies are gold, read them
+export AGENTS_POSTAL_ADDRESS="Your Business, PO Box 123, City, Country"   # required for newsletters (CAN-SPAM)
+node src/cli.mjs check
+node src/cli.mjs email-test you@yourdomain.com                     # sends one real test email
+```
+
+### How it works
+
+- **Double opt-in (default).** A signup is *pending* until the person clicks the link in the
+  confirmation email. Only *confirmed* people get newsletters. This keeps fake and mistyped
+  addresses off your list and gives you proof of consent. Set `AGENTS_DOUBLE_OPT_IN=0` for single
+  opt-in, where the welcome email goes out immediately. Without Resend configured, signups are
+  single opt-in and no email is sent.
+- **Unsubscribe everywhere.** Every welcome email and newsletter has a personal unsubscribe link
+  in the footer, plus `List-Unsubscribe` and `List-Unsubscribe-Post` headers. Those headers let
+  Gmail, Yahoo and others show their own one-click *Unsubscribe* button, which they require of
+  bulk senders. Unsubscribed people stay on file as *unsubscribed*, so they're never emailed again
+  by accident. `signups --delete` erases them completely.
+- **Scanner-safe links.** Opening a confirm or unsubscribe link shows a page with a button. Only
+  the button press (a POST), or a mail client's one-click POST, changes anything. Email security
+  scanners that pre-open links can't confirm or unsubscribe anyone.
+- **Newsletters go only to the right people.** An approved newsletter goes to the confirmed
+  subscribers of that idea's landing page and nobody else. Cold outreach (`outreach.md`) is never
+  sent automatically.
+- **Sending.** Newsletters go out in batches of 100 through Resend's batch endpoint. Each batch
+  has an idempotency key derived from the action id, so retrying a failed send (re-approve and
+  execute) never emails anyone twice. A safety cap (`AGENTS_EMAIL_MAX_RECIPIENTS`, default 1000)
+  refuses unexpectedly large sends.
+- **Emails name the idea from the page id**, never from anything the visitor typed, so nobody can
+  use your signup form to send their own text to someone else's inbox.
+
+Newsletters are sent by whichever machine holds the subscribers. If the company talks to a remote
+`webhook-server` (`AGENTS_SIGNUP_URL` and `AGENTS_WEBHOOK_SECRET` set), approved newsletters go to
+it through the webhook, together with the approved text. Otherwise the company sends them itself.
+
+`signups` now shows confirmed, pending and unsubscribed counts per page. `signups --export` adds a
+status column and never includes the secret link tokens.
+
 ## Automate it
 
 Built-in scheduler. Each cycle first sends out whatever you approved since the last cycle, then
@@ -354,6 +417,11 @@ node src/cli.mjs memory
 | (env only) | `AGENTS_TRUST_PROXY=1` | off (use the socket address for rate limits) |
 | (env only) | `AGENTS_METRICS_SOURCE=local` | auto (remote `/stats` when signup URL + secret are set) |
 | (env only) | `AGENTS_MIN_VIEWS` / `AGENTS_TARGET_CONVERSION` | `100` / `0.05` |
+| (env only) | `RESEND_API_KEY` | — (no emails to subscribers) |
+| (env only) | `AGENTS_EMAIL_FROM` / `AGENTS_EMAIL_REPLY_TO` | — (from is required with Resend) |
+| (env only) | `AGENTS_POSTAL_ADDRESS` | — (required for newsletters) |
+| (env only) | `AGENTS_DOUBLE_OPT_IN=0` | on (confirmation email first) |
+| (env only) | `AGENTS_EMAIL_MAX_RECIPIENTS` | `1000` per newsletter |
 
 ## Extend it
 

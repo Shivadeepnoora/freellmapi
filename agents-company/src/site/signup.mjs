@@ -58,7 +58,7 @@ if(!consent.checked){msg.textContent="Please tick the consent box.";return}
 msg.textContent="Sending...";
 fetch(E+"/signup",{method:"POST",headers:{"content-type":"text/plain"},body:JSON.stringify({page:P,email:email.value,consent:true,website:hp.value})})
 .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d}})})
-.then(function(x){msg.textContent=x.ok?"Thanks! You're on the list.":(x.d&&x.d.error)||"Something went wrong, please try again.";if(x.ok)f.reset()})
+.then(function(x){msg.textContent=x.ok?(x.d&&x.d.message)||"Thanks! You're on the list.":(x.d&&x.d.error)||"Something went wrong, please try again.";if(x.ok)f.reset()})
 .catch(function(){msg.textContent="Network error, please try again."})})});})();`;
 }
 

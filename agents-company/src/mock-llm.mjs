@@ -15,6 +15,7 @@ const FILES = {
   content_writer: '# Launch post\n\nWhy this matters...\n\n## Social posts\n1. We are building something.',
   sales_rep: '# Outreach\n\nHi {{first_name}}, ...\n\nReply STOP to opt out.',
   automation_builder: '// Generates weekly content drafts locally.\nconsole.log("draft written");',
+  email_marketer: 'Subject: Thanks for signing up — here is where we are\n\nHi! Thanks for joining early.\n\n**What we are building:** a simple tool.\n\n- Week 1: research\n- Week 2: first version\n\nWhat would make this most useful for you? Just reply.',
 };
 
 export class MockLLMClient {
@@ -70,6 +71,7 @@ export class MockLLMClient {
             { day: 2, title: 'Publish landing page', type: 'external', kind: 'publish', artifact: 'landing-page.html', details: 'Deploy to static host' },
             { day: 3, title: 'Post launch thread', type: 'external', kind: 'post_social', artifact: 'content.md' },
             { day: 5, title: 'Buy domain', type: 'internal', kind: 'internal', cost_usd: 12 },
+            { day: 8, title: 'Email first update to subscribers', type: 'external', kind: 'send_email', artifact: 'newsletter.md' },
           ],
         };
       case 'ceo':

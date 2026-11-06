@@ -78,6 +78,15 @@ export function loadConfig(overrides = {}, env = process.env) {
     contactEmail: env.AGENTS_CONTACT_EMAIL ?? '',
     trustProxy: env.AGENTS_TRUST_PROXY === '1',
     metricsSource: env.AGENTS_METRICS_SOURCE ?? 'auto',
+    postalAddress: env.AGENTS_POSTAL_ADDRESS ?? '',
+
+    // Email to subscribers (Resend)
+    resendApiKey: env.RESEND_API_KEY ?? '',
+    emailFrom: env.AGENTS_EMAIL_FROM ?? '',
+    emailReplyTo: env.AGENTS_EMAIL_REPLY_TO ?? '',
+    doubleOptIn: env.AGENTS_DOUBLE_OPT_IN !== '0',
+    emailMaxRecipients: Number(env.AGENTS_EMAIL_MAX_RECIPIENTS ?? 1000),
+
     minViews: Number(pick('minViews', 'AGENTS_MIN_VIEWS', 100)),
     targetConversion: Number(pick('targetConversion', 'AGENTS_TARGET_CONVERSION', 0.05)),
     intervalMs: parseInterval(pick('interval', 'AGENTS_INTERVAL', '24h')),
@@ -118,6 +127,16 @@ export function validateConfig(config) {
     if (!signupOrigins(config).length) warnings.push('No allowed signup origins: set AGENTS_GITHUB_PAGES_REPO or AGENTS_SIGNUP_ALLOWED_ORIGINS, or every signup will be refused.');
   } else if (config.githubPagesRepo) {
     (prod ? errors : warnings).push('AGENTS_SIGNUP_URL is not set: published landing pages will not collect signups, so there is no feedback to learn from. Run `webhook-server` on a public HTTPS address and set AGENTS_SIGNUP_URL to it.');
+  }
+
+  // Email to subscribers
+  if (config.resendApiKey) {
+    if (!config.emailFrom) errors.push('RESEND_API_KEY is set but AGENTS_EMAIL_FROM is not, e.g. "Acme <hello@yourdomain.com>" on a domain verified in Resend.');
+    else if (!/<?[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>?\s*$/.test(config.emailFrom)) errors.push(`AGENTS_EMAIL_FROM doesn't look like an email address: "${config.emailFrom}"`);
+    if (!config.signupUrl) warnings.push('Email is configured but AGENTS_SIGNUP_URL is not: confirmation and unsubscribe links need the public server address, so no emails will be sent.');
+    if (!config.postalAddress) (prod ? errors : warnings).push('AGENTS_POSTAL_ADDRESS is not set: newsletters will be refused, because commercial email must include a postal address (CAN-SPAM). A PO box or registered business address works.');
+  } else if (config.signupUrl) {
+    warnings.push('RESEND_API_KEY is not set: subscribers get no confirmation, welcome or newsletter emails (you can still export them with `signups --export`).');
   }
 
   // FreeLLMAPI's README: "for personal experimentation and learning, not

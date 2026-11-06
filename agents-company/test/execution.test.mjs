@@ -34,9 +34,11 @@ test('top opportunities get deliverables, a plan, and external actions queued', 
   const html = readFileSync(join(run.execution[0].workspace, 'landing-page.html'), 'utf8');
   assert.match(html, /^<!doctype html>/);
 
-  // The mock plan has 1 internal + 3 external-ish tasks per opportunity.
+  // The mock plan has 1 internal + 4 external-ish tasks per opportunity
+  // (publish, post, buy domain, email subscribers).
   const pending = approvals.list('pending');
-  assert.equal(pending.length, 6);
+  assert.equal(pending.length, 8);
+  assert.ok(pending.some((p) => p.kind === 'send_email' && p.artifact?.endsWith('/newsletter.md')));
   assert.ok(pending.every((p) => p.kind !== 'internal'));
   assert.match(toMarkdown(run), /## Actions taken/);
 });

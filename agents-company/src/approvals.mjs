@@ -59,7 +59,10 @@ export class ApprovalQueue {
             headers: { 'content-type': 'application/json', ...(webhookSecret ? { 'x-agents-secret': webhookSecret } : {}) },
             body: JSON.stringify({ action: item, content: this.readArtifact(item) }),
           });
-          if (!res.ok) throw new Error(`webhook HTTP ${res.status}`);
+          if (!res.ok) {
+            const detail = await res.json().then((d) => d?.error).catch(() => null);
+            throw new Error(`webhook HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+          }
           const result = await res.json().catch(() => ({}));
           if (result?.status === 'ignored') {
             this.#finish(item, 'manual', result);

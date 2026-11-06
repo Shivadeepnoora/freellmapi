@@ -53,7 +53,9 @@ test('MetricsStore counts views per day, dedupes signups, keeps emails out of st
   m.recordView('idea', new Date('2026-11-01T10:00:00Z'));
   m.recordView('idea', new Date('2026-11-01T11:00:00Z'));
   m.recordView('idea', new Date('2026-11-02T10:00:00Z'));
-  assert.deepEqual(m.addSignup('idea', ' Ann@Example.com '), { added: true });
+  const first = m.addSignup('idea', ' Ann@Example.com ');
+  assert.equal(first.added, true);
+  assert.equal(first.signup.email, 'ann@example.com');
   assert.deepEqual(m.addSignup('idea', 'ann@example.com'), { added: false, reason: 'duplicate' });
   assert.deepEqual(m.addSignup('idea', 'not-an-email'), { added: false, reason: 'invalid email' });
   m.addSignup('idea', 'bob@example.com');
@@ -275,7 +277,7 @@ test('signup configuration checks', () => {
   assert.ok(insecure.errors.some((e) => /https/.test(e)));
   const noContact = validateConfig(loadConfig({}, { ...base, AGENTS_ENV: 'production', AGENTS_SIGNUP_URL: 'https://s.example.com' }));
   assert.ok(noContact.errors.some((e) => /AGENTS_CONTACT_EMAIL/.test(e)));
-  const good = validateConfig(loadConfig({}, { ...base, AGENTS_ENV: 'production', AGENTS_SIGNUP_URL: 'https://s.example.com', AGENTS_BUSINESS_NAME: 'Acme', AGENTS_CONTACT_EMAIL: 'a@acme.co' }));
+  const good = validateConfig(loadConfig({}, { ...base, AGENTS_ENV: 'production', AGENTS_SIGNUP_URL: 'https://s.example.com', AGENTS_BUSINESS_NAME: 'Acme', AGENTS_CONTACT_EMAIL: 'a@acme.co', RESEND_API_KEY: 're_x', AGENTS_EMAIL_FROM: 'Acme <hi@acme.co>', AGENTS_POSTAL_ADDRESS: '1 Main St, Springfield' }));
   assert.deepEqual([good.errors, good.warnings], [[], []]);
 
   assert.deepEqual(signupOrigins(loadConfig({}, base)), ['https://me.github.io']);

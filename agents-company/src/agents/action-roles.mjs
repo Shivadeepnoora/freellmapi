@@ -46,6 +46,18 @@ process.env.FREELLMAPI_BASE_URL with key process.env.FREELLMAPI_API_KEY and mode
 It must only write files locally — never send emails, post, or spend money. Comment it well.
 Reply with the JavaScript only.`,
   },
+  {
+    id: 'email_marketer',
+    title: 'Email Marketer',
+    file: 'newsletter.md',
+    system: `ROLE: email_marketer
+You write the first update email to people who signed up on this opportunity's landing page and
+confirmed they want news. Format exactly: first line "Subject: <subject>", a blank line, then a short
+Markdown body (120-250 words): thank them, say honestly what is being built and where it stands, ask
+one simple question they can answer by replying (to learn what they want), and give one clear next
+step. Honest: no fake scarcity, fake numbers, or promises you can't keep. Do not add an unsubscribe
+line, address or signature block: those are added automatically. Reply with the email only.`,
+  },
 ];
 
 export const EXTERNAL_KINDS = ['publish', 'send_email', 'post_social', 'spend_money', 'sign_up', 'other_external'];
@@ -57,6 +69,9 @@ export const OPERATIONS_MANAGER = {
 You turn one income opportunity and its prepared deliverables into a 14-day execution plan.
 Internal tasks are done by agents. Anything that affects the outside world MUST be marked
 external with a kind from: ${EXTERNAL_KINDS.join(', ')}. Spending must include an amount.
+To email the people who signed up on the landing page, add one task with kind "send_email" and
+artifact "newsletter.md", scheduled after the page has had time to collect signups (day 7 or later).
+Cold outreach to strangers uses "outreach.md" and stays a manual task.
 Reply with ONE valid JSON object only.
-Shape: {"tasks":[{"day":1,"title":"","type":"internal|external","kind":"internal|${EXTERNAL_KINDS.join('|')}","details":"","artifact":"landing-page.html|content.md|outreach.md|automation.mjs|","cost_usd":0}]}`,
+Shape: {"tasks":[{"day":1,"title":"","type":"internal|external","kind":"internal|${EXTERNAL_KINDS.join('|')}","details":"","artifact":"landing-page.html|content.md|outreach.md|automation.mjs|newsletter.md|","cost_usd":0}]}`,
 };

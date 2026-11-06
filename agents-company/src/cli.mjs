@@ -10,7 +10,10 @@
 // agents-company check            show the resolved LLM/search setup and any problems
 // agents-company results          live views, signups and verdicts for every launched page
 // agents-company signups          signup counts; --export [page] prints CSV, --delete <email> erases
+// agents-company email-test <to>  send one test email through Resend to check the setup
 import { parseArgs } from 'node:util';
+import { mailerFromConfig } from './email/resend.mjs';
+import { welcomeEmail } from './email/templates.mjs';
 import { loadConfig, validateConfig, signupOrigins } from './config.mjs';
 import { MetricsStore, metricsFromConfig } from './feedback/metrics.mjs';
 import { collectResults } from './feedback/traction.mjs';
@@ -25,7 +28,7 @@ import { buildExecutors, siteFromConfig } from './executors/index.mjs';
 import { publisherFromConfig } from './executors/github-pages.mjs';
 import { createWebhookServer } from './executors/webhook-server.mjs';
 
-const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups'];
+const COMMANDS = ['run', 'daemon', 'approvals', 'approve', 'reject', 'execute', 'webhook-server', 'memory', 'check', 'results', 'signups', 'email-test'];
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -68,6 +71,7 @@ if (values.help || !COMMANDS.includes(command)) {
   webhook-server: [--port 8787] [--pages-repo owner/name] [--pages-branch gh-pages] [--signup-url URL]
   results:    live views, signups, conversion and verdict per launched page
   signups:    counts per page; [--export] [page] prints CSV with emails; [--delete email] erases a person
+  email-test: <to-address>  send one test email through Resend
   common:     [--data-dir DIR]
 Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL, AGENTS_STRONG_MODEL, AGENTS_ENV,
      FREELLMAPI_BASE_URL, FREELLMAPI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, AGENTS_ALLOW_FREE_TIER=1,
@@ -76,7 +80,9 @@ Env: AGENTS_LLM_PROVIDER, AGENTS_LLM_BASE_URL, AGENTS_LLM_API_KEY, AGENTS_MODEL,
      AGENTS_ACT=0, AGENTS_EXECUTE_TOP, AGENTS_WEBHOOK_URL, AGENTS_WEBHOOK_SECRET, AGENTS_WEBHOOK_PORT,
      AGENTS_GITHUB_PAGES_REPO, AGENTS_GITHUB_PAGES_BRANCH, AGENTS_GITHUB_TOKEN (or GITHUB_TOKEN),
      AGENTS_SIGNUP_URL, AGENTS_SIGNUP_ALLOWED_ORIGINS, AGENTS_BUSINESS_NAME, AGENTS_CONTACT_EMAIL,
-     AGENTS_TRUST_PROXY=1, AGENTS_METRICS_SOURCE=local, AGENTS_MIN_VIEWS, AGENTS_TARGET_CONVERSION`);
+     AGENTS_TRUST_PROXY=1, AGENTS_METRICS_SOURCE=local, AGENTS_MIN_VIEWS, AGENTS_TARGET_CONVERSION,
+     RESEND_API_KEY, AGENTS_EMAIL_FROM, AGENTS_EMAIL_REPLY_TO, AGENTS_POSTAL_ADDRESS, AGENTS_DOUBLE_OPT_IN=0,
+     AGENTS_EMAIL_MAX_RECIPIENTS`);
   process.exit(values.help ? 0 : 1);
 }
 
@@ -109,7 +115,7 @@ let executors;
 try {
   executors = buildExecutors(config, { log });
 } catch (err) {
-  console.error(`GitHub Pages is misconfigured: ${err.message}`);
+  console.error(`Setup error: ${err.message}`);
   process.exit(1);
 }
 const dispatch = () => approvals.dispatch({ webhookUrl: config.webhookUrl, webhookSecret: config.webhookSecret, executors, log });
@@ -156,8 +162,13 @@ switch (command) {
     const metrics = new MetricsStore(config.dataDir);
     const allowedOrigins = signupOrigins(config);
     let server;
+    let mailer;
     try {
-      server = createWebhookServer({ publisher, secret: config.webhookSecret, metrics, allowedOrigins, site: siteFromConfig(config), trustProxy: config.trustProxy, log });
+      mailer = mailerFromConfig(config);
+      server = createWebhookServer({
+        publisher, secret: config.webhookSecret, metrics, allowedOrigins, site: siteFromConfig(config), trustProxy: config.trustProxy,
+        mailer, doubleOptIn: config.doubleOptIn, maxRecipients: config.emailMaxRecipients, log,
+      });
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -166,6 +177,8 @@ switch (command) {
       log(`Webhook server listening on :${config.webhookPort} (GitHub Pages: ${publisher ? `${config.githubPagesRepo}@${config.githubPagesBranch}` : 'not configured'})`);
       log(`Signups accepted from: ${allowedOrigins.join(', ') || 'nowhere (set AGENTS_GITHUB_PAGES_REPO or AGENTS_SIGNUP_ALLOWED_ORIGINS)'}`);
       if (publisher && !config.signupUrl) log('Warning: AGENTS_SIGNUP_URL is not set, so pages published from here will not collect signups.');
+      if (mailer && config.signupUrl) log(`Email: Resend from ${config.emailFrom}; ${config.doubleOptIn ? 'double opt-in (confirmation email first)' : 'single opt-in (welcome email)'}`);
+      else log('Email: off (set RESEND_API_KEY, AGENTS_EMAIL_FROM and AGENTS_SIGNUP_URL to email subscribers)');
     });
     break;
   }
@@ -197,7 +210,28 @@ switch (command) {
       const stats = await store.stats();
       const pages = Object.entries(stats);
       if (!pages.length) console.log('No signups or views recorded in this data directory.');
-      for (const [page, s] of pages) console.log(`${page.padEnd(40)} ${String(s.views).padStart(6)} views ${String(s.signups).padStart(5)} signups`);
+      for (const [page, s] of pages) {
+        console.log(`${page.padEnd(40)} ${String(s.views).padStart(6)} views ${String(s.signups).padStart(5)} signups  (${s.confirmed} confirmed, ${s.pending} pending, ${s.unsubscribed} unsubscribed)`);
+      }
+    }
+    break;
+  }
+  case 'email-test': {
+    const to = ids[0];
+    if (!to) {
+      console.error('Usage: agents-company email-test <your-address>');
+      process.exit(1);
+    }
+    try {
+      const mailer = mailerFromConfig(config);
+      if (!mailer) throw new Error('RESEND_API_KEY is not set');
+      const site = siteFromConfig(config);
+      const message = welcomeEmail({ to, opportunity: 'a test of your email setup', unsubscribeUrl: site.signupUrl ? `${site.signupUrl}/unsubscribe?t=test` : null, site });
+      const { id } = await mailer.send({ ...message, subject: `[Test] ${message.subject}` });
+      console.log(`Sent a test email to ${to} from ${config.emailFrom}${id ? ` (Resend id ${id})` : ''}. Check the inbox and the spam folder.`);
+    } catch (err) {
+      console.error(`Test email failed: ${err.message}`);
+      process.exit(1);
     }
     break;
   }
